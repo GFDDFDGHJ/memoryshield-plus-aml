@@ -1,0 +1,21 @@
+# Secrets — never commit
+.secrets/
+*.key
+*.pem
+
+# Runtime database
+aml_memory.db*
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs / temp
+*.log
+_*.py
+_*.txt
+*.png
