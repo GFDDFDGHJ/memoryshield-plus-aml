@@ -107,7 +107,7 @@ def build_cases():
     method = ("For our benchtop fill measurements, the displayed amount is in millilitres and duration is in milliseconds. "
               "Subtract 0.60 mL from the amount before conversion. Convert the corrected amount to litres and duration to seconds before dividing. "
               "This method is valid only with the vent open; observations with a closed vent are rejected.")
-    needed = ["displayed amount is in millilitres", "duration is in milliseconds", "Subtract 0.60 mL", 
+    needed = ["displayed amount is in millilitres", "duration is in milliseconds", "Subtract 0.60 mL",
               "Convert the corrected amount to litres", "only with the vent open", "closed vent are rejected"]
     for key, raw, duration, vent, query in (
         ("M01_implicit_method_transfer", 12.60, 400., "open",
@@ -150,7 +150,7 @@ def build_cases():
         {"when":op("eq",var("latch"),"closed"),"assign":{"counter":op("add",var("counter"),1)}}],"result":var("counter")}
     add("R03_once_only_skipped_rule", "Using the earlier switchboard procedure, start with latch open and counter zero. What is the final counter?",
         [turn(workflow,"switchboard",score=.45)] + clutter(28),
-        ["once each, in their written order", "false is skipped permanently", "never return to an earlier instruction", 
+        ["once each, in their written order", "false is skipped permanently", "never return to an earlier instruction",
          "if latch is closed, add 10", "if counter is zero, close the latch", "if latch is closed, add 1"], program,1)
 
     name_events = [
