@@ -182,6 +182,13 @@ The existing participant authentication key remains unchanged. Keep the host
 awake during Smoke. A separate Cloudflare fallback is deployment-specific and
 does not replace the fixed participant origin.
 
+The supervisor also checks the fixed origin through public IPv4 ingress every
+120 seconds. It obtains public addresses using DNS over HTTPS and pins each
+connection with `curl --resolve`, retaining hostname and certificate checks.
+This bypasses local Tailscale MagicDNS, which can otherwise make an internal
+success look like a public availability check. State changes are recorded in
+the service log. Public-check failures do not restart a healthy local API.
+
 Before Full:
 
 1. Verify real synthetic Add → Search using the approved embedding model.
