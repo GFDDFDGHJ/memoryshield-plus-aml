@@ -64,6 +64,13 @@ class Config:
     # large selected histories. These are character ceilings, not token counts.
     extended_context_chars: int = int(os.environ.get("AML_EXTENDED_CONTEXT_CHARS", "160000"))
     context_continuation_chars: int = int(os.environ.get("AML_CONTEXT_CONTINUATION_CHARS", "128000"))
+    # Optional semantic second-stage ranking; a timeout or invalid response
+    # retains exact cosine order. This does not generate memory or answers.
+    rerank_enabled: bool = _bool("AML_RERANK", False)
+    rerank_model: str = os.environ.get("AML_RERANK_MODEL", "qwen3-rerank")
+    rerank_base_url: str = os.environ.get("AML_RERANK_BASE_URL", "https://dashscope.aliyuncs.com/api/v1")
+    rerank_api_key: str = os.environ.get("AML_RERANK_API_KEY", embedding_api_key)
+    rerank_timeout: float = float(os.environ.get("AML_RERANK_TIMEOUT", "6"))
 
     # --- Governance (MemoryShield+) ---
     # OFF by default as of 2026-10-21. Measured against the real AML DB, the
@@ -87,7 +94,7 @@ class Config:
     # --- Server ---
     host: str = os.environ.get("AML_HOST", "0.0.0.0")
     port: int = int(os.environ.get("AML_PORT", "8080"))
-    version: str = os.environ.get("AML_VERSION", "2026.10.22-rc6")
+    version: str = os.environ.get("AML_VERSION", "2026.10.22-rc7")
 
 
 CONFIG = Config()

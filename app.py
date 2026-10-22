@@ -128,7 +128,10 @@ class SearchRequest(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "version": CONFIG.version,
-            "embedding_model": CONFIG.embedding_model, "ts": time.time()}
+            "embedding_model": CONFIG.embedding_model,
+            "rerank_enabled": getattr(store, "_reranker", None) is not None,
+            "rerank_model": CONFIG.rerank_model if CONFIG.rerank_enabled else None,
+            "ts": time.time()}
 
 
 @app.post("/add")

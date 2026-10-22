@@ -18,7 +18,7 @@
 
 $dir = [IO.Path]::GetFullPath($PSScriptRoot)
 Set-Location $dir
-$expectedVersion = '2026.10.22-rc6'
+$expectedVersion = '2026.10.22-rc7'
 $expectedModel = 'text-embedding-v4'
 
 function Update-DashScopeEnvironment {
@@ -44,6 +44,11 @@ function Update-DashScopeEnvironment {
     $env:EMBEDDING_DIM = '1024'
     $env:AML_DB_PATH = Join-Path $dir 'aml_text_v4.db'
     $env:AML_VERSION = $expectedVersion
+    $env:AML_RERANK = 'true'
+    $env:AML_RERANK_API_KEY = $env:EMBEDDING_API_KEY
+    $env:AML_RERANK_BASE_URL = 'https://dashscope.aliyuncs.com/api/v1'
+    $env:AML_RERANK_MODEL = 'qwen3-rerank'
+    $env:AML_RERANK_TIMEOUT = '6'
 }
 
 $py = if ($env:AML_PYTHON) { $env:AML_PYTHON } else {

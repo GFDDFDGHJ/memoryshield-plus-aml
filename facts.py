@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 import evidence_links as link_layer
+import query_plan as query_layer
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -1399,6 +1400,12 @@ def _context_tokens(text: str) -> set[str]:
 
 def context_scope(query: str) -> tuple[str, set[str]]:
     """Shared intent and topical vocabulary for downstream raw filtering."""
+    plan = query_layer.plan(query)
+    query = plan["positive_query"]
+    if plan['reason'] == 'broad-private-exclusion-without-positive-scope':
+        return 'topic-scoped', set()
+    if plan["task"] == "global_synthesis":
+        return "global", set()
     topics = _context_tokens(query)
     requested = bool(_CONTEXT_REQUEST.search(query) or _AGGREGATE_QUERY.search(query)
                      or _MEMORY_REFERENCE.search(query) and _OVERVIEW_ABSTRACTION.search(query))
@@ -1420,14 +1427,20 @@ def source_context_scope(rows, query: str) -> tuple[str, set[str], str]:
     or a missing concrete topic into an all-history request.
     """
     scope, topics = context_scope(query)
+    plan = query_layer.plan(query)
+    query = plan["positive_query"]
     if scope == "ordinary":
         return scope, topics, "ordinary"
-    if scope == "global":
-        return scope, topics, "explicit-global"
     rows = [dict(row) for row in rows]
     users = {row['user_id'] for row in rows if row.get('user_id') is not None}
     if len(users) > 1:
         raise ValueError('context selector requires records for a single user')
+    if plan['reason'] == 'broad-private-exclusion-without-positive-scope':
+        return 'topic-scoped', set(), 'broad-privacy-exclusion-without-positive-domain'
+    if scope == "global":
+        reason = ("source-unanchored-memory-overview" if rows and _memory_overview_remainder(query) == set()
+                  else "explicit-global")
+        return scope, topics, reason
     supported = set().union(*(_context_tokens(str(row.get('content', ''))) for row in rows)) if rows else set()
     remainder = _memory_overview_remainder(query)
     if rows and remainder is not None and not remainder:
@@ -1780,7 +1793,14 @@ def _pack_context(
     # segment when a later exception is its final segment. Required schema and
     # validity restrictions still take precedence over these optional anchors.
     endpoints = [0, total - 1, sources[units[-1]['source_rid']][0]]
-    priority = list(dict.fromkeys(index for index in endpoints + priority if index not in required))
+    if scope == 'global':
+        # A synthesis prefix prioritizes explicitly expressed choices, changes
+        # and reasons before routine background. The remaining literal history
+        # keeps the same fair traversal and is available in continuations.
+        salient = [index for index in priority if units[index].get('context_salient')]
+    else:
+        salient = []
+    priority = list(dict.fromkeys(index for index in salient + endpoints + priority if index not in required))
     # A bounded prefix also needs cross-source coverage. Render a sampled
     # global view in the same fair source order used to select it, rather than
     # sorting it back into one long topic's chronological block. Sequence
@@ -1982,12 +2002,22 @@ def _schema_block_closure(units: list[dict], kept: set[int]) -> set[int]:
     return expanded
 
 
+_SYNTHESIS_SALIENCE = re.compile(
+    r"\b(?:decid\w*|decision\w*|chose|chosen|reject\w*|adopt\w*|instead|because|"
+    r"due\s+to|no\s+longer|withdraw\w*|revok\w*|correct\w*)\b"
+    r"|决定|选择|取舍|否决|改为|改成|因为|由于|不再|撤销|撤回|更正", re.I)
+
+
 def context_units_for_query(rows, query: str) -> list[dict]:
     """Pure source selector; input rows must already belong to one user.
 
     No database access, model calls or budget decisions occur here. Both raw
     retrieval and compact views can preserve exactly these original spans.
     """
+    original_query = query
+    plan = query_layer.plan(query)
+    exclusions = plan["excluded_categories"]
+    query = plan["positive_query"]
     rows=[dict(row) for row in rows]
     users={row['user_id'] for row in rows if row.get('user_id') is not None}
     if len(users)>1:
@@ -1996,7 +2026,7 @@ def context_units_for_query(rows, query: str) -> list[dict]:
     if conflicts:
         rows = [row for row in rows if row['rid'] not in conflicts]
     rows.sort(key=lambda row:(row['seq'],row['rid']))
-    scope, topics, _ = source_context_scope(rows, query)
+    scope, topics, _ = source_context_scope(rows, original_query)
     context_request = scope != "ordinary"
     global_scope = scope == "global"
     units, scores = [], {}
@@ -2004,11 +2034,15 @@ def context_units_for_query(rows, query: str) -> list[dict]:
     temporal_metadata_only = bool(_TEMPORAL_QUERY.search(query)) and not non_temporal_topics
     for row in rows:
         for segment, sentence in enumerate(_source_sentences(str(row["content"]))):
+            if exclusions and query_layer.excluded_text(sentence, exclusions):
+                continue
             overlap = len(topics & _context_tokens(sentence))
             if temporal_metadata_only and (_RELATIVE_SOURCE_TIME.search(sentence) or _DATE_LITERAL.search(sentence)):
                 overlap += 1
             unit = dict(row)
             unit.update(source_rid=row["rid"], segment=segment, text=sentence, overlap=overlap)
+            if global_scope:
+                unit['context_salient'] = bool(_SYNTHESIS_SALIENCE.search(sentence))
             units.append(unit)
             scores[row["session_id"]] = max(scores.get(row["session_id"], 0), overlap)
     if not global_scope:

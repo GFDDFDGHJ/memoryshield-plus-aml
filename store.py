@@ -37,6 +37,9 @@ from openai import OpenAI
 
 import facts as fact_layer
 import evidence_links as link_layer
+import query_plan as query_layer
+from reranker import (RerankerClient, MAX_QUERY_BYTES, MAX_DOCUMENT_BYTES,
+                      MAX_WEIGHTED_INPUT_BYTES)
 from config import CONFIG
 
 try:  # NumPy accelerates exact per-user scoring but is optional.
@@ -85,6 +88,7 @@ _SEQUENCE_QUERY = re.compile(
     r"|\bin\s+(?:what|which)\s+order\b"
     r"|\border\s+of\s+(?:events|stages|steps|operations|occurrences|changes)\b"
     r"|\b(?:what|which)\s+(?:happened|occurred|came)\s+first\b"
+    r"|\b(?:what|which)\s+(?:event|stage|step|action|incident)\s+(?:happened|occurred|came)\s+first\b"
     r"|\bwhat\s+happened\s+before\s+and\s+after\b"
     r"|时间线|先后|顺序|阶段排序|变化过程", re.I,
 )
@@ -144,7 +148,7 @@ def _summary_query(query: str) -> bool:
 
 def _original_state_query(query: str) -> bool:
     """The first asserted state is distinct from the earliest dated event."""
-    explicit_state = re.search(r"\b(?:original|initial)\b|最初|原来", query, re.I)
+    explicit_state = re.search(r"\b(?:original|originally|initial)\b|\bat\s+the\s+beginning\b|最初|原来", query, re.I)
     return bool(explicit_state and _STATE_ATTRIBUTE_QUERY.search(query))
 
 
@@ -392,6 +396,9 @@ class MemoryStore:
             "Content-Type": "application/json",
         }
         self._pool = ThreadPoolExecutor(max_workers=CONFIG.embedding_concurrency)
+        self._reranker = (RerankerClient(CONFIG.rerank_api_key, CONFIG.rerank_base_url,
+                                       CONFIG.rerank_model, CONFIG.rerank_timeout)
+                          if CONFIG.rerank_enabled and CONFIG.rerank_api_key else None)
         self._ensure_schema()
 
     # ------------------------------------------------------------------ db
@@ -601,6 +608,9 @@ class MemoryStore:
         top_k: int,
     ) -> list[dict]:
         if top_k <= 0:
+            return []
+        plan = query_layer.plan(query)
+        if plan['reason'] == 'broad-private-exclusion-without-positive-scope':
             return []
         now_iso = _iso(time.time())
         candidates: list[dict] = []
@@ -848,6 +858,10 @@ class MemoryStore:
                     expanded.append(row)
                     used += len(row["content"])
             packed = expanded
+        exclusions = query_layer.plan(query)["excluded_categories"]
+        if exclusions:
+            packed = [evidence for evidence in packed
+                      if not query_layer.excluded_text(evidence["content"], exclusions)]
         return packed
 
     @staticmethod
@@ -864,6 +878,59 @@ class MemoryStore:
             if key in evidence:
                 result[key] = evidence[key]
         return result
+
+    def _rerank_rows(self, query: str, ranked: list) -> list:
+        """Reorder a bounded semantic shortlist without changing evidence.
+
+        Scope, ownership and explicit-state safeguards retain their existing
+        decisions. Relative model scores never delete rows or establish facts.
+        """
+        client = getattr(self, "_reranker", None)
+        if (client is None or len(ranked) < 2 or not query.strip()
+                or _summary_query(query) or _sequence_query(query) or _original_state_query(query)
+                or _current_query(query) or _single_personal_attribute(query)
+                or _CORRECTION_CUE.search(ranked[0][1]["content"])):
+            return ranked
+        # Dense and sparse recall complement each other: an old calibration
+        # may rank below many repetitive observations. Reserve half the pool
+        # for rare query terms across this user's eligible original sources.
+        head = []
+        terms = fact_layer._context_tokens(query)
+        tokens = {row["rid"]: fact_layer._context_tokens(row["content"]) for _, row in ranked}
+        weights = {term: math.log(1 + len(ranked) / (1 + sum(term in words for words in tokens.values())))
+                   for term in terms}
+        sparse = sorted(ranked, key=lambda pair: sum(weights[term] for term in terms & tokens[pair[1]["rid"]])
+                        / math.sqrt(max(1, len(tokens[pair[1]["rid"]]))), reverse=True)
+        selected_ids = set()
+        weighted_size = 0
+        query_size = min(MAX_QUERY_BYTES, len(query.encode("utf-8")))
+        # Interleave recall paths before applying the provider input ceiling;
+        # trimming a long pool must not remove every sparse-only candidate.
+        interleaved = [pair for pair_group in zip(ranked, sparse) for pair in pair_group]
+        for pair in interleaved:
+            if len(head) >= 64:
+                break
+            if pair[1]["rid"] in selected_ids:
+                continue
+            document = f"[speaker role={pair[1]['role']}]\n{pair[1]['content']}"
+            needed = query_size + min(MAX_DOCUMENT_BYTES, len(document.encode("utf-8")))
+            if weighted_size + needed > MAX_WEIGHTED_INPUT_BYTES:
+                break
+            head.append(pair)
+            selected_ids.add(pair[1]["rid"])
+            weighted_size += needed
+        if len(head) < 2:
+            return ranked
+        documents = [f"[speaker role={row['role']}]\n{row['content']}" for _, row in head]
+        try:
+            order = client.rerank(query, documents)
+            if (not isinstance(order, list) or len(order) != len(head)
+                    or any(type(index) is not int for index in order)
+                    or set(order) != set(range(len(head)))):
+                return ranked
+        except Exception:
+            return ranked
+        return [head[index] for index in order] + [pair for pair in ranked if pair[1]["rid"] not in selected_ids]
 
     def _search_raw(
         self,
@@ -884,6 +951,12 @@ class MemoryStore:
             " WHERE i.user_id = ? AND i.status = 'active' ORDER BY i.seq, i.rid",
             (user_id,),
         ).fetchall()
+        exclusions = query_layer.plan(query)["excluded_categories"]
+        if exclusions:
+            rows = [row for row in rows if not query_layer.excluded_text(row["content"], exclusions)]
+        query = query_layer.plan(query)["positive_query"]
+        if exclusions and not query.strip():
+            return []
         if not rows:
             return []
 
@@ -1074,6 +1147,7 @@ class MemoryStore:
                                             key=lambda pair: pair[1]["seq"], reverse=True)
                 start = stop
 
+        ranked = self._rerank_rows(query, ranked)
         selected: list[tuple[float, sqlite3.Row]] = []
         seen: set[int] = set()
 

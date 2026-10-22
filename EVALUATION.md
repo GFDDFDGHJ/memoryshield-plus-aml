@@ -16,6 +16,71 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## rc7: synthesis planning and semantic ranking
+
+rc7 adds a deterministic operation/scope/exclusion plan and an optional native
+DashScope `qwen3-rerank` client. The [competition FAQ](https://agentmemories.ai/competition/)
+leaves rerankers unrestricted; embeddings remain `text-embedding-v4` and no
+generative LLM is called. Ranking uses at most 64 eligible original sources,
+interleaving dense and rare-term recall inside one user. Provider scores only
+order this pool; they never generate facts, delete memories or become a
+cross-query relevance threshold. Time ordering, original/current state,
+explicit correction and precise personal-property safeguards remain ahead of
+the model. Network errors and malformed/incomplete ranks preserve prior order.
+
+Ranking copies are capped at 3,000 query / 3,500 document UTF-8 bytes, with
+`query_bytes * document_count + sum(document_bytes) <= 100,000`. Only these
+copies may be cut; returned quotations keep their original source. Eight
+shared provider slots do not queue: saturation falls back immediately. The
+six-second urllib timeout bounds network operations, not a strict DNS/whole
+request deadline. urllib follows the host's existing proxy configuration.
+
+The unchanged 47-case evaluator, paired real-v4 caches and two fixed seeds
+(20261022 / 20261031) produce these evidence diagnostics:
+
+| Metric | rc6 | rc7 with replayed model ranks |
+|---|---:|---:|
+| Strict scenarios, both prefix budgets | 41 / 47 | 42 / 47 |
+| Necessary literals visible at 8,000 characters | 285 / 306 | 291 / 306 |
+| Necessary literals visible at 16,000 characters | 300 or 301 / 306 | 306 / 306 |
+| Source fidelity | 47 / 47 | 47 / 47 |
+
+Per-case comparisons found no lost necessary literal, newly incorrect role or
+source-fidelity loss. The online/batch diagnostic now exposes seven original
+sources rather than six in both write modes; their equivalence still passes.
+Overall coverage gains come from synthesis planning and prefix priority. An
+ablation with the same rc7 code and no model has identical literal coverage;
+model ordering reduces one workflow distractor flag from two to one at 8k,
+while two flags remain at 16k. Do not attribute every improvement to reranking.
+
+`evaluate_rerank_replay.py` wraps the frozen evaluator without editing its
+fixtures or scoring. Model orders are cached against a SHA256 of the full
+query and ordered candidate documents, then replayed with networking blocked.
+All 21 requests in each final real-vector evaluation hit that cache. Model
+preparation used invented texts only, separately from the offline evaluation.
+
+Additional checks:
+
+- Eight frozen extended-context contracts remain 8/8 for the full return.
+- `evaluate_synthesis_intent.py` has 16 invented query contrasts; its ten
+  personal-history overview variants now expose all 128 original sources.
+  Before rc7, some variants exposed 67/128 or 0/128. The explicit work/travel
+  exclusion case retains its 32 source markers without its private witnesses.
+  Unknown named-topic controls remain non-global; that does not mean dense
+  fallback always returns no unrelated records.
+- `evaluate_method_dependencies.py` freezes nine conditional, transfer,
+  role and revocation scenarios. Both rc6 and rc7 retrieve all necessary
+  inputs with real v4 vectors (9/9). Under deliberately adverse controlled
+  dense ordering, rc6 is 4/9 and rc7 plus cached ranks is 7/9. The latter is a
+  robustness diagnostic, not evidence of a real-vector gain. Independent
+  arithmetic/state reference results are not generated answer scores.
+
+Explicit privacy exclusions match known field/value grammar. They do not
+constitute universal privacy detection. Abstract named-topic paraphrases,
+implicit cross-language links and final rule application can still fail.
+No official evaluation conversations, questions, answers or database contents
+were inspected to tune this release. These results do not predict Smoke/Full.
+
 Use invented data and disposable user scopes. The evaluation must not open a
 deployment database, official questions or answers, or participant secrets.
 Real embedding preparation is a separate explicit step; cached comparisons
