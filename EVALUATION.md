@@ -125,3 +125,50 @@ facts.py  1b4f94147274018bec5ca4478bfde4adee105fe53af36ea0ce398d013635b9a6
 Fixture SHA256 (first seed): `f1e51c0c71d563dc145451f8ed4490d277ab2ccef7add7e88574fe4ade018943`.
 Evaluator SHA256: `4c2964c22ae001bab97bb95901717775db4167286a38688804d625c59767a897`.
 Shared vector cache SHA256 (first seed): `1ecccbc036bde7eab51b79c576acf0ff01526185eb216b928cdc3dcd806e383c`.
+
+## rc5 capability preservation
+
+rc5 preserves unresolved personal-state evidence instead of treating the fact
+parser as a complete whitelist. Narrow property excerpts retain adjacent
+effective-date qualifications and continue to exclude recognizable unrelated
+properties. A preserved statement is evidence, not a confirmed replacement.
+
+Explicit response policies apply to factual answers as well as execution
+requests. Applicable rules use result and character budgets rather than a
+twelve-rule cutoff; explicit local domains remain local. Rule extraction no
+longer discards qualified instructions after the twelfth item, and source
+recovery keeps their full adjacent exception chains. Same-source execution
+protocols remain attached to matching rule evidence even when they do not
+repeat the queried variables.
+
+A shared source-aware scope plan recognizes conservative references to the
+speaker's prior communication. An unmatched concrete topic does not become
+permission to return the whole history. Context packing compares literal and
+reversible numeric encodings, preserves required qualifications, covers source
+boundaries, and fills the remaining budget with whole source spans.
+
+All 275 local checks pass: the previous 231, 25 new state/rule/privacy checks,
+and 19 source-planning/budget checks. The same new 25 checks pass 12/25 on
+frozen rc4 and 25/25 on rc5. Two independent execution-protocol variants change
+from 0/2 to 2/2 for complete operational evidence at 8k, 16k and full context.
+These are invented evidence tests; no official conversations or questions
+were used.
+
+The frozen 47-scenario real-vector evaluation is unchanged on both seeds:
+41/47 strict scenario passes; 285/306 evidence markers at 8k; 300/306 and
+301/306 at 16k respectively. Per-scenario marker, quotation, scope-contamination
+and ranking comparisons find no new regressions. The previously documented
+six strict-scenario failures and the older 26/27 context result remain visible.
+
+The new tests do not establish final-answer correctness, comprehensive privacy
+protection or an expected official score. Unknown languages/property grammars,
+abstract domain summaries without source anchors, and very long indivisible
+paragraphs remain limitations. No model, embedding dimension, storage schema,
+participant URL or authentication change is required.
+
+Frozen rc5 algorithm source SHA256:
+
+```text
+store.py  49b02a229545c25822354ef3c47359ec0ed45bf53c9dbbdb073b94f510a885c6
+facts.py  6eb00bbfe4b3621eab05528aaaa7094bb728a41c100fb6b49da47e3d5dfcb34f
+```

@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **2026.10.22-rc4**. Repository:
+Candidate version: **2026.10.22-rc5**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -115,7 +115,7 @@ override it. See [Alibaba quota documentation](https://help.aliyun.com/zh/model-
 | `EMBEDDING_API_KEY` | Project secret or `DASHSCOPE_API_KEY` |
 | `AML_DB_PATH` | Project-local `aml_text_v4.db` |
 | `AML_AUTH_TOKEN` | `.secrets/aml_auth_token.txt` |
-| `AML_VERSION` | `2026.10.22-rc4` |
+| `AML_VERSION` | `2026.10.22-rc5` |
 | `AML_RECENCY_WEIGHT` | `0.10` |
 | `AML_GOVERNANCE` | `false` |
 | `AML_HOST` / `AML_PORT` | `0.0.0.0` / `8080` |
@@ -175,6 +175,8 @@ python test_prefix_retrieval.py
 python test_temporal_context.py
 python test_scope_consistency.py
 python test_schema_context_blocks.py
+python test_capability_generalization.py
+python test_context_planning.py
 python evaluate_quality.py --source-root . --output tmp/quality-candidate.json
 python evaluate_context_quality.py --source-root . --output tmp/context-candidate.json
 python evaluate_capabilities.py --source-root . --output tmp/capabilities.json
@@ -219,7 +221,7 @@ tunnel names change after restarts and require updating the AML API binding.
 
 This Windows deployment keeps the existing public origin
 `https://hlq5070.tail50f4d4.ts.net` and the same `/add` and `/search` paths.
-`watcher.ps1` supervises the rc4 API. It pins Beijing `text-embedding-v4`, 1024
+`watcher.ps1` supervises the rc5 API. It pins Beijing `text-embedding-v4`, 1024
 dimensions, and `aml_text_v4.db`; health probes verify version and model. A
 lifetime file lock prevents duplicate supervisors. Launch the watcher outside
 the interactive tool process; the current host uses `Win32_Process.Create`.

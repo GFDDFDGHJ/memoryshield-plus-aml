@@ -393,7 +393,7 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
 
     # instruction turns state their rules as bullets; those are authoritative
     if relaxed:
-        for m in list(_BULLET.finditer(text))[:8]:
+        for m in _BULLET.finditer(text):
             body = _clean(m.group(1))
             if _ok(body) and len(body) > 8:
                 add("rule", _slug(body, 60) or "rule", body, "rule", 0.75, m.start())
@@ -481,9 +481,13 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
             candidates[key] = f
     out = list(candidates.values())
     out.sort(key=lambda f: (-f.confidence, -f.source_pos))
-    # Confidence chooses the bounded candidate set, never the update order.
-    # Applying later statements last also allows A -> B -> A in one message.
-    return sorted(out[:12], key=lambda f: f.source_pos)
+    # Explicit standing rules cannot be silently discarded merely because a
+    # message contains many of them. The input message already has a bound;
+    # retain that complete rule set while bounding ordinary derived facts.
+    # Confidence chooses facts, never the update order (including A -> B -> A).
+    rules = [fact for fact in out if fact.kind == "rule"]
+    stable = [fact for fact in out if fact.kind != "rule"][:12]
+    return sorted(rules + stable, key=lambda f: f.source_pos)
 
 
 # ----------------------------------------------------------------- storage
@@ -815,7 +819,7 @@ def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items:
     linked = [sentences[index]]
     # Adjacent exceptions qualify the rule, rather than constituting another
     # independent instruction. Stop at unrelated narration or a new rule.
-    for sentence in sentences[index + 1:index + 4]:
+    for sentence in sentences[index + 1:]:
         if not re.match(r"\s*(?:exception\b|except\b|unless\b|however\b|but\b|otherwise\b|注意|例外|但是|但若|除非|否则|不过)", sentence, re.I):
             break
         linked.append(sentence)
@@ -868,19 +872,30 @@ def relevant_rules(
         r"\b(?:all|every)\s+(?:standing\s+)?(?:rules|instructions|constraints)\b|所有.{0,5}(?:规则|指令|约束)", query, re.I,
     )))
     has_items = _has_items(conn)
-    executing = bool(_EXECUTION_QUERY.search(query))
     ranked = []
     for row in rows:
         value = _complete_source_rule(conn, row, has_items)
         overlap = len(q & _tokens(value + " " + row["predicate"]))
-        explicit_response = bool(_RESPONSE_SCOPE.search(value))
-        conditional_rule = bool(re.match(r"\s*(?:if|when|whenever)\b|\s*(?:如果|当|若)",value,re.I))
-        global_rule = (bool(_GLOBAL_RULE.search(value)) and not conditional_rule
-                       and (explicit_response or not _LOCAL_RULE.search(value) and bool(_OUTPUT_POLICY.search(value)))
+        semantics = re.sub(r'^\s*(?:[-*\u2022]|\d+[.)])\s+', '', value)
+        explicit_response = bool(_RESPONSE_SCOPE.search(semantics))
+        conditional_rule = bool(re.match(r"\s*(?:if|when|whenever)\b|\s*(?:如果|当|若)",semantics,re.I))
+        local_prefix = bool(re.match(r"\s*(?:for|in|during|within|while)\b|\s*(?:针对|在)",semantics,re.I))
+        outer_response_scope = bool(re.match(r"\s*for\s+(?:all|every|each)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b",semantics,re.I))
+        domain_text = re.sub(r"\b(?:for|in)\s+(?:all|every|each|your|future|subsequent)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", " ", semantics, flags=re.I)
+        # 'in Spanish' or 'in a compact table' specifies the output manner,
+        # while a leading 'For the invoice task' scopes the whole directive.
+        # An explicit universal response object can carry such a manner, but
+        # cannot override an outer local scope or a subordinate condition.
+        embedded_condition = bool(re.search(r"[,;]\s*(?:if|when|whenever)\b|(?:针对|用于)",domain_text,re.I))
+        local_domain = bool(_LOCAL_RULE.search(domain_text)) and not explicit_response
+        global_rule = (bool(_GLOBAL_RULE.search(semantics)) and not conditional_rule and not embedded_condition
+                       and (not local_prefix or outer_response_scope)
+                       and not local_domain
+                       and (explicit_response or bool(_OUTPUT_POLICY.search(semantics)))
                        and row["confidence"] >= .6)
-        if not overlap and not (executing and global_rule) and (not asks_all_rules or row["confidence"] < 0.6):
+        if not overlap and not global_rule and (not asks_all_rules or row["confidence"] < 0.6):
             continue
-        score = overlap / max(1.0, len(q) ** 0.5) + (0.15 if asks_rules else 0.0) + (.2 if executing and global_rule else 0)
+        score = overlap / max(1.0, len(q) ** 0.5) + (0.15 if asks_rules else 0.0) + (.2 if global_rule else 0)
         ranked.append((score, row, value, global_rule))
     ranked.sort(key=lambda item: (-item[0], -item[1]["seq"], -item[1]["fid"]))
     out, seen = [], set()
@@ -1326,6 +1341,51 @@ _CONTEXT_REQUEST = re.compile(
     r"|总结|汇总|概述|综述|总览|要点|总体|全部|一共|多少|规律|趋势|整体|回顾|比较|时间线|先后|顺序|轨迹",
     re.I,
 )
+_MEMORY_REFERENCE = re.compile(
+    r"\b(?:my|our)\s+(?:(?:past|previous|earlier|shared|personal)\s+)?"
+    r"(?:conversations?|chats?|discussions?|history|experiences?|memories)\b"
+    r"|\b(?:I|we)\s+(?:(?:have|had|previously|already)\s+)*"
+    r"(?:told|said|shared|mentioned|discussed|experienced|learned|learnt)(?:\s+(?:you|with\s+you))?\b"
+    r"|(?:我|我们)(?:曾经|已经|之前|以前|至今|所|的|和你|跟你|向你)*"
+    r"(?:告诉过你|告诉你|提到过|提到|聊过|讨论过|分享过|经历|对话|会话|聊天|讨论)", re.I,
+)
+_OVERVIEW_ABSTRACTION = re.compile(
+    r"\b(?:(?:broad|main|key|important|significant|salient|central|major|recurring|common)\s+)*"
+    r"(?:themes?|points?|things?|takeaways?|highlights?|insights?|lessons?)\b"
+    r"|(?:主要|重要|关键|共同|反复出现|总体|广泛)*(?:主题|要点|事情|启示|教训)", re.I,
+)
+_OVERVIEW_RELATION = re.compile(
+    r"\b(?:emerg\w*|aris\w*|stand\s+out|come\s+through)\s+(?:from|in)\b"
+    r"|\b(?:based\s+on|so\s+far|up\s+to\s+now)\b"
+    r"|(?:浮现|体现|反映|出现|至今|到目前为止)", re.I,
+)
+_TOPIC_CONSTRAINT = re.compile(
+    r"\b(?:about|regarding|concerning|on|for|within|without|except|excluding)\s+"
+    r"(?!me\b|us\b|myself\b|ourselves\b)\S"
+    r"|[\"\u201c\u201d\u2018\u2019]|\d|(?:关于|针对|不包括|排除|除了)", re.I,
+)
+
+
+def _memory_overview_remainder(query: str) -> set[str] | None:
+    """Parse a discourse reference without erasing an arbitrary topic noun.
+
+    This only recognizes an overview of the speaker's previous communication
+    or experience. A named object, exclusion or residual domain term remains
+    constrained; failure to match such a topic is never permission to disclose
+    the rest of a person's history.
+    """
+    if not _MEMORY_REFERENCE.search(query):
+        return None
+    text = _MEMORY_REFERENCE.sub(" ", query)
+    text = _OVERVIEW_RELATION.sub(" ", text)
+    if _TOPIC_CONSTRAINT.search(text):
+        return None
+    # Sentence-initial request words are not entities. Elsewhere, an explicit
+    # proper name/acronym is a concrete constraint, even without 'about'.
+    without_lead = re.sub(r"^\s*[A-Z][A-Za-z]*\b", " ", text)
+    if re.search(r"\b[A-Z][A-Za-z0-9_-]{2,}\b", without_lead):
+        return None
+    return _context_tokens(_OVERVIEW_ABSTRACTION.sub(" ", text))
 
 
 def _context_tokens(text: str) -> set[str]:
@@ -1339,12 +1399,39 @@ def _context_tokens(text: str) -> set[str]:
 def context_scope(query: str) -> tuple[str, set[str]]:
     """Shared intent and topical vocabulary for downstream raw filtering."""
     topics = _context_tokens(query)
-    requested = bool(_CONTEXT_REQUEST.search(query) or _AGGREGATE_QUERY.search(query))
+    requested = bool(_CONTEXT_REQUEST.search(query) or _AGGREGATE_QUERY.search(query)
+                     or _MEMORY_REFERENCE.search(query) and _OVERVIEW_ABSTRACTION.search(query))
     if not requested:
         return "ordinary", topics
     # A quantifier ranges over the requested topic, rather than erasing it:
     # 'all sessions about the turbine' still excludes unrelated personal data.
     return ("global" if not topics else "topic-scoped"), topics
+
+
+def source_context_scope(rows, query: str) -> tuple[str, set[str], str]:
+    """Return the shared query plan for already user-scoped source records.
+
+    The third value explains a scope decision; consumers should gate raw
+    evidence and choose their context budget using the first value. The
+    memory-overview fallback is deliberately source-aware and conservative:
+    it repairs unsupported discourse vocabulary only after a general overview
+    grammar consumes every residual word. It cannot turn an ordinary question
+    or a missing concrete topic into an all-history request.
+    """
+    scope, topics = context_scope(query)
+    if scope == "ordinary":
+        return scope, topics, "ordinary"
+    if scope == "global":
+        return scope, topics, "explicit-global"
+    rows = [dict(row) for row in rows]
+    users = {row['user_id'] for row in rows if row.get('user_id') is not None}
+    if len(users) > 1:
+        raise ValueError('context selector requires records for a single user')
+    supported = set().union(*(_context_tokens(str(row.get('content', ''))) for row in rows)) if rows else set()
+    remainder = _memory_overview_remainder(query)
+    if rows and remainder is not None and not remainder:
+        return "global", set(), "source-unanchored-memory-overview"
+    return scope, topics, "lexical-topic-supported" if topics & supported else "topic-unmatched"
 
 
 def _bridge_sessions(units: list[dict], selected: set[str]) -> set[str]:
@@ -1404,6 +1491,32 @@ _TEMPORAL_TOPIC = frozenset("date dates time times schedule schedules calendar c
 _TEMPORAL_QUERY = re.compile(r"\b(?:dates?|times?|schedules?|calendars?|deadlines?|intervals?)\b|日期|时间|日程|何时|间隔",re.I)
 _DATE_LITERAL = re.compile(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b|\d{4}年\d{1,2}月|\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\b",re.I)
 _CONTEXT_QUALIFIER = re.compile(r"^(?:except|unless|however|but|only|provided|if|when|otherwise|do\s+not|never)\b|^(?:除非|但是|不过|否则|例外|仅|只有|不要|禁止|如果|当)",re.I)
+_PROCEDURE_SUBJECT = re.compile(r"\b(?:rules?|steps?|instructions?|operations?|algorithm|execution|procedure|protocol|policy)\b|规则|步骤|指令|操作|算法|执行|流程",re.I)
+_PROCEDURE_CONTROL = re.compile(r"\b(?:order|sequence|once|passes|repeat\w*|skip\w*|return\w*|revisit\w*)\b|\bat\s+most\s+one\s+time\b|顺序|先后|一次|重复|跳过|返回|重访",re.I)
+
+
+def _procedure_dependency_indexes(units: list[dict], kept: set[int]) -> set[int]:
+    """Original execution controls attached to an already matched source.
+
+    A protocol can precede a long appendix or follow its rule table. It need
+    not repeat the queried state variables. This closure never opens another
+    source or session and it does not infer or execute a missing policy.
+    """
+    sources = {units[index]['source_rid'] for index in kept}
+    dependencies = {index for index, unit in enumerate(units)
+                    if unit['source_rid'] in sources
+                    and _PROCEDURE_SUBJECT.search(unit['text'])
+                    and _PROCEDURE_CONTROL.search(unit['text'])}
+    for index in tuple(dependencies):
+        following = index + 1
+        while (following < len(units)
+               and units[following]['source_rid'] == units[index]['source_rid']
+               and _CONTEXT_QUALIFIER.search(units[following]['text'].strip())):
+            dependencies.add(following)
+            following += 1
+    for index in dependencies:
+        units[index]['context_dependency'] = True
+    return dependencies
 
 
 def _context_metadata(units: list[dict]):
@@ -1476,7 +1589,7 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
     # Validity restrictions qualify the data that follows. Quote their real
     # source first so a consumer's prefix cannot read a sampled numeric block
     # as usable evidence while missing its later withdrawal.
-    units=sorted(units,key=lambda unit:not unit.get('context_qualification',False))
+    units=sorted(units,key=lambda unit:not (unit.get('context_qualification') or unit.get('context_dependency')))
     if not compact_numeric:
         source,metadata_columns,metadata = _context_metadata(units)
         lines=[source,"Columns: source_rid@seq/segment"
@@ -1526,56 +1639,148 @@ def _pack_context(units: list[dict], limit: int, budget_chars: int, scope: str) 
     header = (f"[DIGEST] {scope} source evidence; included={{included}}/{total} source segments; "
               "coverage={coverage}. Source sequence is provenance, not inferred event chronology. "
               "Timestamp origins below determine whether relative-time anchoring is available.\n")
-    chosen = units
-    # The full literal-template representation is attempted before reducing
-    # any evidence. Sampling is a disclosed last resort, never an aggregate.
-    for _ in range(12):
-        # Preserve direct source wording whenever it fits. The reversible
-        # representation is useful for genuinely large repeated measurements,
-        # rather than making an already short record harder to read.
-        pieces = _context_pieces(chosen)
-        reserved_headers = min(limit, len(pieces)) * (len(header) + 100)
-        if sum(len(piece) + 1 for piece in pieces) + reserved_headers > budget_chars:
-            pieces = _context_pieces(chosen, compact_numeric=True)
-        count = min(limit, len(pieces))
-        groups = [[] for _ in range(count)]
-        sizes = [0] * count
-        target = max(1, sum(len(piece) + 1 for piece in pieces) // count)
-        group_index = 0
-        for piece in pieces:
-            if groups[group_index] and sizes[group_index] + len(piece) > target and group_index + 1 < count:
-                group_index += 1
-            groups[group_index].append(piece)
-            sizes[group_index] += len(piece) + 1
+    presentation_order = None
+
+    def render(indices):
+        chosen_indices = sorted(indices) if presentation_order is None else [index for index in presentation_order if index in indices]
+        chosen = [units[index] for index in chosen_indices]
+        if not chosen:
+            return []
         coverage = "complete for selected source scope" if len(chosen) == total else "truncated; do not treat as complete statistics"
         prefix = header.format(included=len(chosen), coverage=coverage)
-        out = [prefix + "\n".join(group) for group in groups if group]
-        actual = sum(map(len, out))
-        if actual <= budget_chars:
-            return out
-        if len(chosen) <= 1:
-            # Even one indivisible source may exceed the bound. Label the cut
-            # explicitly; do not silently clip a template row or an exception.
-            prefix = header.format(included=0, coverage="truncated within one source; not complete statistics")
-            source_label = _source_label(chosen[0]) + "\n"
-            allowance = budget_chars - len(prefix) - len(source_label) - 50
-            if allowance <= 0:
-                return []
-            return [prefix + source_label + _evidence_quote(chosen[0]["text"], allowance)]
-        smaller = max(1, min(len(chosen) - 1, int(len(chosen) * budget_chars / actual * .90)))
-        required=[index for index,unit in enumerate(units) if unit.get('context_qualification',False)]
-        if required:
-            remaining=[index for index in range(total) if index not in set(required)]
-            count=max(0,smaller-len(required))
-            optional=[remaining[index] for index in _evidence_indices(len(remaining),count)]
-            chosen=[units[index] for index in sorted((required+optional)[:max(smaller,len(required))])]
-            if len(chosen)>=len(units) and actual>budget_chars:
-                # Qualifiers alone may be indivisible under a very small
-                # budget. Omit numeric data rather than dropping their caveat.
-                chosen=[units[required[0]]]
+
+        def assemble(pieces):
+            count = min(limit, len(pieces))
+            groups = [[] for _ in range(count)]
+            sizes = [0] * count
+            target = max(1, sum(len(piece) + 1 for piece in pieces) // count)
+            group_index = 0
+            for piece in pieces:
+                if groups[group_index] and sizes[group_index] + len(piece) > target and group_index + 1 < count:
+                    group_index += 1
+                groups[group_index].append(piece)
+                sizes[group_index] += len(piece) + 1
+            return [prefix + "\n".join(group) for group in groups if group]
+
+        normal = assemble(_context_pieces(chosen))
+        # Literal source wording is preferred when it fits. Numeric templates
+        # are an alternative encoding, never a reason to inflate the context
+        # and then throw away a much larger portion of the source evidence.
+        if sum(map(len, normal)) <= budget_chars:
+            return normal
+        compact = assemble(_context_pieces(chosen, compact_numeric=True))
+        return min((normal, compact), key=lambda output: sum(map(len, output)))
+
+    full = render(range(total))
+    if sum(map(len, full)) <= budget_chars:
+        return full
+
+    required = {index for index, unit in enumerate(units)
+                if unit.get('context_qualification') or unit.get('context_schema') or unit.get('context_dependency')}
+    required_view = render(required)
+    if required and sum(map(len, required_view)) > budget_chars:
+        # An incomplete validity restriction cannot accompany apparently
+        # usable observations. Quote that restriction alone and disclose it.
+        first = next((index for index in sorted(required) if units[index].get('context_qualification')),
+                     min(required))
+        chosen = units[first]
+        prefix = header.format(included=0, coverage="truncated within one source; not complete statistics")
+        label = _source_label(chosen) + "\n"
+        allowance = budget_chars - len(prefix) - len(label) - 50
+        return [prefix + label + _evidence_quote(chosen['text'], allowance)] if allowance > 0 else []
+
+    # Cover sources before spending the remaining budget on another sentence
+    # from a source already represented. Interleave sessions and spread the
+    # first visits through early/middle/late source order, retaining provenance.
+    def spread(indexes):
+        indexes = list(indexes)
+        if not indexes:
+            return []
+        out = [indexes[0]]
+        if len(indexes) > 1:
+            out.append(indexes[-1])
+        intervals = [(1, len(indexes) - 2)]
+        while intervals:
+            following = []
+            for start, end in intervals:
+                if start <= end:
+                    middle = (start + end) // 2
+                    out.append(indexes[middle])
+                    following.extend(((start, middle - 1), (middle + 1, end)))
+            intervals = following
+        return out
+
+    sources, sessions = {}, {}
+    for index, unit in enumerate(units):
+        source = unit['source_rid']
+        sources.setdefault(source, []).append(index)
+        per_session = sessions.setdefault(unit['session_id'], [])
+        if not per_session or per_session[-1] != source:
+            per_session.append(source)
+    session_queues = [spread(sessions[session]) for session in spread(sessions)]
+    source_order = []
+    for rank in range(max(map(len, session_queues), default=0)):
+        for queue in session_queues:
+            if rank < len(queue):
+                source_order.append(queue[rank])
+    source_queues = [spread(sources[source]) for source in source_order]
+    priority = []
+    for rank in range(max(map(len, source_queues), default=0)):
+        for queue in source_queues:
+            if rank < len(queue) and queue[rank] not in required:
+                priority.append(queue[rank])
+    # Fair session traversal alone can spend a small budget on each session's
+    # first turn before ever reaching the end of the filtered history. Reserve
+    # endpoint representatives first, including the last source's opening
+    # segment when a later exception is its final segment. Required schema and
+    # validity restrictions still take precedence over these optional anchors.
+    endpoints = [0, total - 1, sources[units[-1]['source_rid']][0]]
+    priority = list(dict.fromkeys(index for index in endpoints + priority if index not in required))
+    # A bounded prefix also needs cross-source coverage. Render a sampled
+    # global view in the same fair source order used to select it, rather than
+    # sorting it back into one long topic's chronological block. Sequence
+    # numbers remain explicit for consumers that need the original chronology.
+    if scope == 'global':
+        presentation_order = sorted(required) + priority
+
+    # Measure actual rendered sizes. A binary bounded prefix avoids the old
+    # repeated .90 resampling, which could leave half the budget unused. Exact
+    # whole-span backfill then uses gaps without claiming complete coverage.
+    low, high = 0, len(priority)
+    best, best_view = set(required), required_view
+    while low < high:
+        count = (low + high + 1) // 2
+        trial = required | set(priority[:count])
+        view = render(trial)
+        if sum(map(len, view)) <= budget_chars:
+            low = count
+            best, best_view = trial, view
         else:
-            chosen = [units[index] for index in _evidence_indices(total, smaller)]
-    return []
+            high = count - 1
+    # Prefix size is normally monotonic, but literal-template grouping can
+    # change at a threshold. Never trust the estimate without the exact view.
+    trial = required | set(priority[:low])
+    view = render(trial)
+    if view and sum(map(len, view)) <= budget_chars:
+        best, best_view = trial, view
+    remaining = [index for index in priority if index not in best]
+    if len(remaining) > 128:
+        remaining = [remaining[index] for index in _evidence_indices(len(remaining), 128)]
+    for index in remaining:
+        trial = best | {index}
+        view = render(trial)
+        if view and sum(map(len, view)) <= budget_chars:
+            best, best_view = trial, view
+    if best_view:
+        return best_view
+
+    # One long indivisible source can still exceed the complete context. The
+    # excerpt is explicitly incomplete and cannot be mistaken for statistics.
+    chosen = units[priority[0] if priority else 0]
+    prefix = header.format(included=0, coverage="truncated within one source; not complete statistics")
+    label = _source_label(chosen) + "\n"
+    allowance = budget_chars - len(prefix) - len(label) - 50
+    return [prefix + label + _evidence_quote(chosen['text'], allowance)] if allowance > 0 else []
 
 
 _NUMERIC_CELL = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?\s*(?:[%A-Za-zµμ°][A-Za-z0-9µμ°%/^²³-]{0,15})?")
@@ -1687,6 +1892,9 @@ def _schema_block_closure(units: list[dict], kept: set[int]) -> set[int]:
             if len(run)<3:
                 continue
             expanded.update(run)
+            # Sampling an anonymous data block without its column/unit
+            # declaration would preserve numbers but change their meaning.
+            units[index]['context_schema']=True
             for other in indexes:
                 if units[other]['source_rid']!=header['source_rid']:
                     continue
@@ -1697,6 +1905,7 @@ def _schema_block_closure(units: list[dict], kept: set[int]) -> set[int]:
                         or _CONTEXT_QUALIFIER.search(text.strip())
                         or re.search(r'\b(?:all|each|every)\s+(?:\w+\s+){0,2}(?:measurements?|observations?|readings?|records?|rows?|samples?|trials?|runs?)\b|(?:所有|每个|每次|每项).{0,8}(?:测量|观测|记录|样本|实验|行)',text,re.I)):
                     expanded.add(other)
+                    units[other]['context_schema']=True
     # A directly following withdrawal/restriction refers to the selected data
     # block even when it does not repeat the experiment's topic nouns.
     for indexes in by_session.values():
@@ -1738,7 +1947,7 @@ def context_units_for_query(rows, query: str) -> list[dict]:
     if len(users)>1:
         raise ValueError('context selector requires records for a single user')
     rows.sort(key=lambda row:(row['seq'],row['rid']))
-    scope, topics = context_scope(query)
+    scope, topics, _ = source_context_scope(rows, query)
     context_request = scope != "ordinary"
     global_scope = scope == "global"
     units, scores = [], {}
@@ -1801,7 +2010,11 @@ def context_units_for_query(rows, query: str) -> list[dict]:
                     numerical=sum(len(_NUMERIC_LITERAL.findall(units[index]["text"])) >= 2 for index in tabular)
                     if len(tabular) >= 3 and numerical >= 2 and any(index in anchors for index in tabular):
                         kept.update(tabular)
+                        for index in tabular:
+                            if len(_NUMERIC_LITERAL.findall(units[index]['text'])) < 2:
+                                units[index]['context_schema']=True
             kept=_schema_block_closure(units,kept)
+            kept.update(_procedure_dependency_indexes(units,kept))
             units = [unit for index,unit in enumerate(units) if index in kept]
         else:
             # An ordinary lookup needs matching evidence rather than a full
@@ -1837,7 +2050,7 @@ def get_digests(
     ).fetchall()
     if not rows:
         return _bound_legacy(_legacy_digests(conn,user_id,query,limit),budget_chars)
-    scope,_=context_scope(query)
+    scope,_,_=source_context_scope(rows,query)
     units=context_units_for_query(rows,query)
     return _pack_context(units,limit,budget_chars,"global" if scope=='global' else 'topic-scoped')
 

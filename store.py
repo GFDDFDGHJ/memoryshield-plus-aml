@@ -99,11 +99,8 @@ _RULE_REQUEST = re.compile(
     r"prohibited|forbidden|apply|applies)\b|规则|要求|指令|约束|必须|应该|能否|禁止|按照",
     re.I,
 )
-_EXECUTION_REQUEST = re.compile(
-    r"^\s*(?:please\s+)?(?:write|draft|create|compose|generate|format|reply|respond|"
-    r"answer|summarize|summarise|prepare|produce|list|translate|rewrite|explain)\b"
-    r"|^\s*(?:请|帮我|替我|写|生成|整理|翻译|回答|总结)", re.I,
-)
+# Use the same intent decision for rule selection, ordering and budgeting.
+_EXECUTION_REQUEST = fact_layer._EXECUTION_QUERY
 _RULE_QUERY_WORDS = frozenset(
     "rule rules instruction instructions guideline guidelines constraint constraints "
     "must should required allowed prohibited forbidden apply applies write draft "
@@ -263,14 +260,21 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
             spans.append((at + offset, piece, tokens & fact_layer._tokens(piece), unit))
     if not spans:
         return _excerpt(text, query)
-    selected, covered = [], set()
-    remaining = budget
-    blocked_chain = False
     # An adjacent exception can reverse a matched sentence without repeating
     # its nouns. Reserve it with that sentence before choosing extra matches.
     context_cue = re.compile(
         r"^(?:except|unless|however|but|only|provided|if|when|otherwise|do\s+not|never)\b"
         r"|^(?:除非|但是|不过|否则|例外|仅|只有|不要|禁止)", re.I)
+    # The introduction can define an execution protocol without repeating
+    # the requested variables. Its dependent exception chain must still pass
+    # the same all-or-disclosed-omission check as any other matching source.
+    opening = units[0][:min(500, max(0, budget // 5))]
+    if len(units) > 1 and context_cue.search(units[1].strip()):
+        opening = ""
+    selected = [(locations[0], opening, 0)] if opening else []
+    covered = tokens & fact_layer._tokens(opening)
+    remaining = budget - len(opening) - (35 if opening else 0)
+    blocked_chain = False
     def table_header(unit: int) -> int | None:
         """Retain the schema of a literal pipe/TSV/CSV numeric row."""
         row = units[unit].strip().strip("|")
@@ -288,6 +292,35 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
                 if numeric == 0 and labels >= 2:
                     return previous
         return None
+    # Document-wide execution controls qualify every selected rule. They need
+    # not repeat a requested variable, and can occur after the rule bodies.
+    procedure_subject = re.compile(
+        r"\b(?:rules?|steps?|instructions?|operations?|algorithm|execution|procedure)\b"
+        r"|规则|步骤|指令|操作|算法|执行", re.I)
+    procedure_control = re.compile(
+        r"\b(?:order|sequence|once|times?|passes?|iterations?|repeat\w*|revisit\w*|"
+        r"skip\w*|stop\w*|return|before|after)\b|顺序|次序|一次|遍历|重复|跳过|终止|回到", re.I)
+    protocol = {index for index,part in enumerate(units)
+                if procedure_subject.search(part) and procedure_control.search(part)}
+    for index in tuple(protocol):
+        following = index + 1
+        while following < len(units) and context_cue.search(units[following].strip()):
+            protocol.add(following)
+            following += 1
+    if protocol:
+        # Replace a partial opening with the whole dependency group. If it
+        # cannot fit, disclose its omission rather than quote a partial policy.
+        selected = [piece for piece in selected if piece[2] not in protocol]
+        remaining = budget - sum(len(piece) + 35 for _,piece,_ in selected)
+        needed = sum(len(units[index]) + 35 for index in protocol)
+        if needed <= min(remaining, max(500, budget // 2)):
+            selected.extend((locations[index], units[index], index) for index in sorted(protocol))
+            remaining -= needed
+            for index in protocol:
+                covered |= tokens & fact_layer._tokens(units[index])
+        else:
+            blocked_chain = True
+            spans = [span for span in spans if span[3] not in protocol]
     while spans and remaining >= 150:
         best = max(range(len(spans)), key=lambda i: (
             len(spans[i][2] - covered), len(spans[i][2]), -spans[i][0]))
@@ -572,8 +605,9 @@ class MemoryStore:
         # Query-related rules are individual evidence blocks. In particular, a
         # conditional rule keeps its trigger and is not limited to the five
         # rules displayed by the compact background profile.
-        rule_cap = 12 if _EXECUTION_REQUEST.search(query) else 4
-        rule_limit = rule_cap if top_k == 1 else min(rule_cap, max(1, structured_limit))
+        # Applicable instructions compete on the actual evidence budget, not
+        # a fixed count that silently drops the thirteenth constraint.
+        rule_limit = max(1, structured_limit)
         rules = fact_layer.relevant_rules(conn, user_id, query, rule_limit)
         if top_k == 1:
             rules = [evidence for evidence in rules if _single_slot_rule(query, evidence)][:1]
@@ -643,7 +677,7 @@ class MemoryStore:
         structured: list[dict] = []
         seen_contents: set[str] = set()
         structured_budget = 12000 if wants_summary else (
-            6000 if _profile_query(query) or _EXECUTION_REQUEST.search(query) else 2000)
+            8000 if rules else 6000 if _profile_query(query) or _EXECUTION_REQUEST.search(query) else 2000)
         if wants_summary:
             candidates.sort(key=lambda evidence: not evidence["id"].startswith("digest_"))
         for evidence in candidates:
@@ -665,8 +699,10 @@ class MemoryStore:
         if scoped_attribute:
             predicates = {scoped_attribute, "nickname"} if scoped_attribute == "name" else {scoped_attribute}
             structured = [evidence for evidence in structured
-                          if evidence.get("subject") == "self"
-                          and evidence.get("predicate") in predicates]
+                          if (evidence.get("subject") == "self"
+                              and evidence.get("predicate") in predicates)
+                          or (evidence["id"].startswith("rule_")
+                              and evidence.get("scope") == "global")]
         complete_sources: dict[int, dict] = {}
         for evidence in structured:
             rid = evidence.get("source_rid")
@@ -693,6 +729,8 @@ class MemoryStore:
                 or (_current_query(query) and identity.startswith("change_")
                     and evidence.get("status") == "active")
                 or identity in strong_rule_ids
+                or (top_k > 1 and identity.startswith("rule_")
+                    and evidence.get("scope") == "global")
             )
         leading = [evidence for evidence in structured if preferred(evidence)]
         supplementary = [evidence for evidence in structured if not preferred(evidence)]
@@ -731,8 +769,10 @@ class MemoryStore:
             identity = id(evidence)
             if identity in seen_evidence:
                 continue
-            if len(packed) >= top_k or len(evidence["content"]) > remaining_chars:
+            if len(packed) >= top_k:
                 break
+            if len(evidence["content"]) > remaining_chars:
+                continue
             packed.append(evidence)
             seen_evidence.add(identity)
             remaining_chars -= len(evidence["content"])
@@ -748,7 +788,7 @@ class MemoryStore:
             "score": score,
             "created_at": _iso(float(created_at)) if created_at is not None else _iso(time.time()),
         }
-        for key in ("source_rid", "session_id", "seq", "role", "status", "subject", "predicate"):
+        for key in ("source_rid", "session_id", "seq", "role", "status", "subject", "predicate", "scope"):
             if key in evidence:
                 result[key] = evidence[key]
         return result
@@ -804,6 +844,7 @@ class MemoryStore:
 
         attribute_quotes: dict[int, str] = {}
         attribute_corrections: set[int] = set()
+        attribute_fallback: dict[int, str] = {}
         requested_attribute = _single_personal_attribute(query)
         if requested_attribute:
             predicates = {requested_attribute}
@@ -814,28 +855,82 @@ class MemoryStore:
                 r"\bmy\s+(?:" + "|".join(re.escape(word) for word in attribute_words if word.isascii())
                 + r")\b|我的(?:" + "|".join(re.escape(word) for word in attribute_words if not word.isascii()) + ")", re.I,
             )
+            # First-person grammar is independent of the attribute extractor.
+            # A dense near-tie alone must not pull arbitrary unparsed records
+            # into a narrowly scoped personal-property response.
+            self_reference = re.compile(
+                r"\b(?:i|my|me|myself|je|mon|ma|mes|moi|yo|mi|mis|eu|meu|minha|"
+                r"ich|mein|meine|mich)\b|\bj['’]|我", re.I)
             for _, row in ranked:
                 if not fact_layer._speaker_relevant({
                     "subject": "self", "predicate": requested_attribute, "role": row["role"],
                 }, query):
                     continue
                 sentences = fact_layer._source_sentences(row["content"])
-                matched = []
-                for sentence in sentences:
+                matched_indexes, unresolved = set(), []
+                for sentence_index, sentence in enumerate(sentences):
+                    parsed = fact_layer.extract_facts(sentence)
                     correction = bool(_CORRECTION_CUE.search(sentence) and direct_self.search(sentence))
-                    if correction or any(fact.subject == "self" and fact.predicate in predicates
-                                         for fact in fact_layer.extract_facts(sentence)):
-                        matched.append(sentence)
+                    known_self = any(fact.subject == "self" and fact.predicate in predicates for fact in parsed)
+                    known_other = any(fact.subject != "self" and fact.predicate in predicates for fact in parsed)
+                    # A first-person source can discuss the requested property
+                    # without matching the extractor's assertion grammar. Keep
+                    # its literal words; do not manufacture an updated fact.
+                    unparsed_self = (not known_other and self_reference.search(sentence)
+                                     and bool(attribute_words & fact_layer._tokens(sentence)))
+                    if correction or known_self or unparsed_self:
+                        matched_indexes.add(sentence_index)
                         if correction:
                             attribute_corrections.add(row["rid"])
-                if matched:
-                    attribute_quotes[row["rid"]] = "\n".join(matched)
-            # Apply only when explicit source assertions establish the requested
-            # attribute. Unknown paraphrases/languages retain semantic fallback.
+                    elif not parsed:
+                        # A recognizable key/value statement about a different
+                        # personal property is not an ambiguous update to this
+                        # one, even if its embedding is unusually close.
+                        field = re.search(
+                            r"\bmy\s+([^.!?\n:：=]{1,60}?)\s*(?:\b(?:is|are|was|were)\b|[:：=])"
+                            r"|我的([^。！？\n:：=]{1,30}?)(?:是|为|[:：=])", sentence, re.I)
+                        field_text = next((part for part in field.groups() if part), "") if field else ""
+                        if not field or attribute_words & fact_layer._tokens(field_text):
+                            unresolved.append(sentence)
+                if matched_indexes:
+                    retained_indexes = set(matched_indexes)
+                    for index in matched_indexes:
+                        previous = index - 1
+                        while previous >= 0 and fact_layer._CONTEXT_QUALIFIER.search(sentences[previous].strip()):
+                            retained_indexes.add(previous)
+                            previous -= 1
+                        following, qualifying = index + 1, False
+                        previous_topics = fact_layer._context_tokens(sentences[index])
+                        while following < len(sentences):
+                            sentence = sentences[following]
+                            topics = fact_layer._context_tokens(sentence)
+                            cue = bool(fact_layer._CONTEXT_QUALIFIER.search(sentence.strip()))
+                            continuation = qualifying and bool(previous_topics & topics)
+                            if not (cue or continuation):
+                                break
+                            retained_indexes.add(following)
+                            qualifying, previous_topics = True, topics
+                            following += 1
+                    attribute_quotes[row["rid"]] = "\n".join(
+                        sentence for index,sentence in enumerate(sentences) if index in retained_indexes)
+                elif unresolved and self_reference.search(" ".join(unresolved)):
+                    attribute_fallback[row["rid"]] = "\n".join(unresolved)
+            # Parsing failure is uncertainty, not evidence of irrelevance.
+            # Preserve semantically competitive unresolved statements while
+            # continuing to quote only the relevant property from known turns.
             if attribute_quotes:
-                ranked = [pair for pair in ranked if pair[1]["rid"] in attribute_quotes]
+                reference = max(score for score,row in ranked if row["rid"] in attribute_quotes)
+                retained = []
+                for score,row in ranked:
+                    rid = row["rid"]
+                    if rid in attribute_quotes:
+                        retained.append((score,row))
+                    elif rid in attribute_fallback and score >= reference - .10:
+                        attribute_quotes[rid] = attribute_fallback[rid]
+                        retained.append((score,row))
+                ranked = retained
 
-        scope, topics = fact_layer.context_scope(query)
+        scope, topics, scope_reason = fact_layer.source_context_scope(rows, query)
         context_quotes: dict[int, str] = {}
         if scope == "topic-scoped" and topics:
             # Share exactly the same scope selector as compact source views.

@@ -1,15 +1,15 @@
 {
-  "version": "2026.10.22-rc4",
+  "version": "2026.10.22-rc5",
   "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
   "base_commit": "aed97db67b7dbd6d4d35678b4c0c609cf2050014",
   "files": {
     ".gitignore": "4badc3591acc13a5e0c555349355bc6abf10d3c13411c39ba7033a0ca1dd44ff",
-    "README.md": "5fab2c098ef95ced8b3162f576de11e4ac3cf2796692dfc61a1eb83e9fb1c4b8",
+    "README.md": "3c2cbd961b587ad27ba6de0de7fc0856309b65ed216b07d660c43c23e9395fcf",
     "requirements.txt": "2a4f6b3916178d9223d2268046697764c2bf01ebc4594fbb2660693628b30ebd",
     "app.py": "e5cacaeac67afb4848c4098f8e45c99534ed28f6a74d8db775838218569df61d",
-    "config.py": "6193ac1a004a30ff5a75fd95f1fbb16ac5af9335b7cf4bdac42b865232318db0",
-    "store.py": "86ff46724321b98d23f521357d16d9148cd775646bef4d548f5dac1d9b4f0734",
-    "facts.py": "1b4f94147274018bec5ca4478bfde4adee105fe53af36ea0ce398d013635b9a6",
+    "config.py": "ed47c36a9c2346c7336091d88d84bcf89af8333093163292fc98fa48c65340ab",
+    "store.py": "49b02a229545c25822354ef3c47359ec0ed45bf53c9dbbdb073b94f510a885c6",
+    "facts.py": "6eb00bbfe4b3621eab05528aaaa7094bb728a41c100fb6b49da47e3d5dfcb34f",
     "governance.py": "1176d62a60ced84f124129fa05736d7df25c8207cb607b8af0592c017b3d11b9",
     "smoke_test.py": "bcccac8c226456737102ccd49e86751e6b30c36a15b544db51645e7369800075",
     "test_facts.py": "86718bac0756ef7665fae45df5acc5303d83d32b5157913e9100e09617b05bc5",
@@ -26,10 +26,12 @@
     "test_scope_consistency.py": "c3c778606217efb7c7c84ad2753bdfc5f93238cb003c715b7ee9f5c4dad7cbe7",
     "evaluate_capabilities.py": "4c2964c22ae001bab97bb95901717775db4167286a38688804d625c59767a897",
     "test_schema_context_blocks.py": "6e378521d43a90772daf180b89f3ec7e8faa990a0b42f96cd71670d165768e53",
+    "test_capability_generalization.py": "b406fa156bb221c0745e09e53cf8e9f42a068e4a488fbc031ed1eda8d8d03933",
+    "test_context_planning.py": "81b4e43d7d4e4367df463ccce8f4cbc25b6a435d83b5ba5643c4fc9a61f0927c",
     "prepare_capability_vectors.py": "b9e7c89f0019f23490188842458629e6f5c5f6f4076a8466ef8eef7fa1e205f1",
-    "EVALUATION.md": "964fa9b962953267686138fa04a6cc4a1de66be0f02242a8cc38c4732e773771",
-    "watcher.ps1": "74e52a1363d014812be796c1263758e7615f4ba52a93a8d340caef1f369a86aa",
+    "EVALUATION.md": "324405085eb388b84c524e512f80b30215437bf1512cbe8ba7fcae6e2ff86f01",
+    "watcher.ps1": "81ef344c1d473120528c5c0592083d60bcdd98b17732b5f792dcf8e8577cb41c",
     "run-watcher.cmd": "38ad6fc1364ef01e475678d5a996389d83454b4b166b993b964471116ac11f36",
-    "prepare_submission.py": "fdfa6c182177a0d3088569cbeeefa2b8de68c16203dbee4994759bd15f468cd3"
+    "prepare_submission.py": "28101b661b8f3667436fbbfc442301b7e46642cf25dd1f132bd58923adfd6e7d"
   }
 }
