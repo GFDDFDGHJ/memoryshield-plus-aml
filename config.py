@@ -27,36 +27,51 @@ def _read_secret(filename: str) -> str:
 
 @dataclass(frozen=True)
 class Config:
-    # --- Embedding endpoint (OpenAI-compatible / Volcengine Ark) ---
-    # base_url=https://ark.cn-beijing.volces.com/api/v3
-    # The API key can also live in .secrets/ark_api_key.txt (one line, no quotes).
-    #
-    # EMBEDDING_MODE:
-    #   "standard"   -> POST /embeddings, OpenAI-compatible, model=text endpoint
-    #   "multimodal" -> POST /embeddings/multimodal, one text item per request,
-    #                   used for the doubao-embedding-vision endpoint which embeds
-    #                   text (and images) and returns 2048-dim vectors.
-    embedding_base_url: str = os.environ.get("EMBEDDING_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
-    embedding_api_key: str = os.environ.get("EMBEDDING_API_KEY", _read_secret("ark_api_key.txt"))
-    embedding_model: str = os.environ.get("EMBEDDING_MODEL", "ep-20261015115102-j7n5s")
-    embedding_mode: str = os.environ.get("EMBEDDING_MODE", "multimodal")
-    embedding_dim: int = int(os.environ.get("EMBEDDING_DIM", "2048"))
+    # --- Embedding endpoint ---
+    # The default is the Beijing DashScope endpoint. Keys are region-specific;
+    # set EMBEDDING_BASE_URL for another region or a workspace-specific domain.
+    # EMBEDDING_API_KEY overrides the project secret file, which in turn
+    # overrides the machine-wide DASHSCOPE_API_KEY.
+    # Cycle 2 Open-source Methods requires text-embedding-v4. Keep its vectors
+    # in a separate database from the previous Ark deployment.
+    embedding_base_url: str = os.environ.get(
+        "EMBEDDING_BASE_URL", os.environ.get(
+            "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    )
+    embedding_api_key: str = os.environ.get(
+        "EMBEDDING_API_KEY",
+        _read_secret("dashscope_api_key.txt") or os.environ.get("DASHSCOPE_API_KEY", ""),
+    )
+    embedding_model: str = os.environ.get("EMBEDDING_MODEL", "text-embedding-v4")
+    embedding_mode: str = os.environ.get("EMBEDDING_MODE", "standard")
+    embedding_dim: int = int(os.environ.get("EMBEDDING_DIM", "1024"))
+    embedding_batch_size: int = int(os.environ.get("EMBEDDING_BATCH_SIZE", "10"))
     embedding_concurrency: int = int(os.environ.get("EMBEDDING_CONCURRENCY", "8"))
 
     # --- Storage ---
-    db_path: str = os.environ.get("AML_DB_PATH", "aml_memory.db")
+    db_path: str = os.environ.get(
+        "AML_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "aml_text_v4.db")
+    )
 
     # --- Retrieval ---
-    # How many ANN candidates to pull globally before the per-user_id filter.
-    # Must be large enough to contain all of the queried user's active records.
+    # Legacy setting retained for launch compatibility; exact per-user search
+    # does not use a shared ANN candidate pool.
     candidate_pool: int = int(os.environ.get("AML_CANDIDATE_POOL", "4000"))
-    recency_weight: float = float(os.environ.get("AML_RECENCY_WEIGHT", "0.15"))
+    # Only explicit current-state queries use a recency tie-break, capped at
+    # a 0.01 cosine gap. Ordinary and historical queries have no age boost.
+    recency_weight: float = float(os.environ.get("AML_RECENCY_WEIGHT", "0.10"))
 
     # --- Governance (MemoryShield+) ---
-    # Disabled by default: the AML benchmark data is clean (no poisoning), so an
-    # aggressive keyword-based quarantine would only hurt recall. Supersession
-    # (prefer the later statement when a newer message restates a fact) stays on.
-    governance_enabled: bool = _bool("AML_GOVERNANCE", True)
+    # OFF by default as of 2026-10-21. Measured against the real AML DB, the
+    # supersession rule in governance.py fired 132 times and hid 1480 of 3974
+    # rows (37%), because _TOPIC_PATTERNS extracts pronouns and filler from
+    # dialogue ("Yes, that is quite true." -> topic='that') and then does a
+    # LIKE '%that%' bulk demotion. Killed rows sit at 31% depth of each user's
+    # history, which is exactly the early history that long-range summary (F1)
+    # and event-ordering (C2) questions need -- F1 scored 0.00.
+    # Re-enable only after supersession is rewritten to match on extracted
+    # (subject, predicate, value) triples with a per-event kill cap.
+    governance_enabled: bool = _bool("AML_GOVERNANCE", False)
     quarantine_enabled: bool = _bool("AML_QUARANTINE", False)
 
     # --- Auth ---
@@ -68,6 +83,7 @@ class Config:
     # --- Server ---
     host: str = os.environ.get("AML_HOST", "0.0.0.0")
     port: int = int(os.environ.get("AML_PORT", "8080"))
+    version: str = os.environ.get("AML_VERSION", "2026.10.22-rc2")
 
 
 CONFIG = Config()

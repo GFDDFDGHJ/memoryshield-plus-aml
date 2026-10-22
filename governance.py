@@ -26,6 +26,7 @@ UPDATE_CUES = (
 # Pattern "X is now Y" / "X = Y" to extract a topic keyword for supersession.
 _TOPIC_PATTERNS = [
     re.compile(r"\b([A-Za-z][A-Za-z0-9_ ]{2,40})\s+(?:is|was|=|now\s+is)\b", re.I),
+    re.compile(r"([\u4e00-\u9fa5]{2,15})\s+(?:是|叫|在|为|改成|改为|现在是)"),
 ]
 
 

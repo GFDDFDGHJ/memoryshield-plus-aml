@@ -1,5 +1,5 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-sqlite-vec>=0.1.6
-openai>=1.30
-httpx>=0.27
+fastapi==0.146.0
+uvicorn[standard]==0.54.0
+sqlite-vec==0.1.9
+openai==3.35.1
+httpx==0.28.1

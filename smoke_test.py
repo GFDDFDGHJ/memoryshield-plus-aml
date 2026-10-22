@@ -20,6 +20,10 @@ DIM = 64
 _tmp = tempfile.mkdtemp()
 os.environ["AML_DB_PATH"] = os.path.join(_tmp, "test.db")
 os.environ["AML_GOVERNANCE"] = "false"
+# Auth: the deployment reads .secrets/aml_auth_token.txt, so an unauthenticated
+# TestClient would get a 401 on /add. This test exercises the memory contract,
+# not the auth path, so explicitly disable the token here.
+os.environ["AML_AUTH_TOKEN"] = ""
 os.environ["EMBEDDING_API_KEY"] = "test"
 os.environ["EMBEDDING_DIM"] = str(DIM)
 
@@ -43,6 +47,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app as app_module  # noqa: E402
 
 client = TestClient(app_module.app)
+app_module.AUDIT_LOG = os.path.join(_tmp, "requests.jsonl")
 
 
 def check(cond: bool, msg: str) -> None:

@@ -5,6 +5,10 @@
 
 # Runtime database
 aml_memory.db*
+aml_text_v4.db*
+*.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
@@ -19,3 +23,10 @@ venv/
 _*.py
 _*.txt
 *.png
+tmp/
+requests.jsonl
+cf-url.txt
+watcher.lock
+cloudflared.exe
+submission-source/
+submission-source.zip
