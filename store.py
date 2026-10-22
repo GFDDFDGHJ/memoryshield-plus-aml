@@ -29,6 +29,7 @@ import sqlite3
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 import httpx
 import sqlite_vec
@@ -74,6 +75,10 @@ _CURRENT_QUERY = re.compile(
     re.I,
 )
 _INITIAL_QUERY = re.compile(r"\b(?:first|earliest|original|initial)\b|最初|最早|原来", re.I)
+_STATE_ATTRIBUTE_QUERY = re.compile(
+    r"\b(?:value|code|password|key|name|location|address|setting|configuration|status|state)\b"
+    r"|数值|代码|口令|密码|密钥|名字|姓名|住址|地址|设置|配置|状态", re.I,
+)
 _SEQUENCE_QUERY = re.compile(
     r"\b(?:chronological|chronology|timeline|sequence)\b"
     r"|\bin\s+(?:what|which)\s+order\b"
@@ -109,7 +114,6 @@ _CORRECTION_CUE = re.compile(
     r"^\s*(?:correction\b|actually\b|no\s*[,，:]|to\s+correct\b)"
     r"|^\s*(?:更正|纠正|修正|不对|实际上)", re.I,
 )
-_FACT_LOOKUP = re.compile(r"^\s*(?:what|which|who|where|when)\b|^\s*(?:谁|哪个|哪位|哪里|何时|什么)", re.I)
 
 
 def _evidence_body(text: str) -> str:
@@ -132,7 +136,47 @@ def _single_slot_rule(query: str, evidence: dict) -> bool:
 
 
 def _summary_query(query: str) -> bool:
-    return any(word in query.lower() for word in fact_layer._SUMMARY_WORDS)
+    # One intent decision controls both source selection and its context budget.
+    return fact_layer.context_scope(query)[0] != "ordinary"
+
+
+def _original_state_query(query: str) -> bool:
+    """The first asserted state is distinct from the earliest dated event."""
+    explicit_state = re.search(r"\b(?:original|initial)\b|最初|原来", query, re.I)
+    return bool(explicit_state and _STATE_ATTRIBUTE_QUERY.search(query))
+
+
+def _single_personal_attribute(query: str) -> str | None:
+    """Recognize an unambiguous requested property, without a sensitive denylist.
+
+    This positive scope is deliberately narrow. Multi-property, historical,
+    relational, advice and summary requests keep their normal evidence path.
+    """
+    if (_summary_query(query) or _profile_query(query) or _chronology_query(query)
+            or re.search(r"\band\b|\bor\b|以及|分别|同时|和|与", query, re.I)):
+        return None
+    if not re.search(r"\bmy\b|我的|我(?:叫|住)|\bwhere\b.{0,20}\bi\b", query, re.I):
+        return None
+    tokens = fact_layer._tokens(query)
+    if len(tokens) > 12:
+        return None
+    attributes = [attribute for attribute, terms in fact_layer._ATTRIBUTE_TERMS.items()
+                  if tokens & fact_layer._tokens(terms)]
+    if len(attributes) != 1:
+        return None
+    attribute = attributes[0]
+    residual = query
+    for term in sorted(fact_layer._ATTRIBUTE_TERMS[attribute].split(), key=len, reverse=True):
+        pattern = r"\b" + re.escape(term) + r"\b" if term.isascii() else re.escape(term)
+        residual = re.sub(pattern, " ", residual, flags=re.I)
+    residual = re.sub(
+        r"\b(?:current|currently|now|latest|still|tell|remind|recall|remember|state|"
+        r"give|provide|say|said|mention|mentioned|please|own|full|legal|am)\b"
+        r"|请问|告诉我|提醒我|我的|我|是什么|什么|目前|现在|当前|最新|仍然|的|叫", " ", residual, flags=re.I,
+    )
+    # An unexplained relation/entity makes 'my' ambiguous: the requested name
+    # may belong to another person. Preserve semantic fallback in that case.
+    return None if fact_layer._tokens(residual) else attribute
 
 
 def _chronology_query(query: str) -> bool:
@@ -195,7 +239,15 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
         return text
     tokens = fact_layer._tokens(query)
     spans = []
-    units = fact_layer._source_sentences(text)
+    units = []
+    # Keep literal table delimiters: whitespace normalization would erase TSV
+    # column boundaries before a matched numeric row can recover its schema.
+    for line in text.splitlines():
+        if len(line) <= 500 and any(line.count(delimiter) >= 2 for delimiter in ("|", "\t", ",")):
+            if line.strip():
+                units.append(line.strip())
+        else:
+            units.extend(fact_layer._source_sentences(line))
     locations = []
     start = 0
     for unit, part in enumerate(units):
@@ -219,6 +271,23 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
     context_cue = re.compile(
         r"^(?:except|unless|however|but|only|provided|if|when|otherwise|do\s+not|never)\b"
         r"|^(?:除非|但是|不过|否则|例外|仅|只有|不要|禁止)", re.I)
+    def table_header(unit: int) -> int | None:
+        """Retain the schema of a literal pipe/TSV/CSV numeric row."""
+        row = units[unit].strip().strip("|")
+        for delimiter in ("|", "\t", ","):
+            cells = [cell.strip() for cell in row.split(delimiter)]
+            if len(cells) < 3 or sum(bool(re.match(r"^[+-]?(?:\d|\.\d)", cell)) for cell in cells) < 2:
+                continue
+            for previous in range(unit - 1, -1, -1):
+                candidate = units[previous].strip().strip("|")
+                columns = [cell.strip() for cell in candidate.split(delimiter)]
+                if len(columns) != len(cells):
+                    break
+                numeric = sum(bool(re.match(r"^[+-]?(?:\d|\.\d)", cell)) for cell in columns)
+                labels = sum(bool(re.search(r"[A-Za-z\u4e00-\u9fff]", cell)) for cell in columns)
+                if numeric == 0 and labels >= 2:
+                    return previous
+        return None
     while spans and remaining >= 150:
         best = max(range(len(spans)), key=lambda i: (
             len(spans[i][2] - covered), len(spans[i][2]), -spans[i][0]))
@@ -229,6 +298,9 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
                for previous in selected):
             continue
         context = []
+        schema = table_header(unit)
+        if schema is not None and not any(previous[2] == schema for previous in selected):
+            context.append((locations[schema], units[schema], schema))
         following = unit + 1
         while following < len(units) and context_cue.search(units[following].strip()):
             if not any(previous[2] == following for previous in selected):
@@ -310,11 +382,15 @@ class MemoryStore:
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     created_at REAL NOT NULL,
+                    timestamp_origin TEXT NOT NULL DEFAULT 'legacy-unknown',
                     status TEXT NOT NULL DEFAULT 'active',
                     seq INTEGER NOT NULL
                 )
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(items)")}
+            if "timestamp_origin" not in columns:
+                conn.execute("ALTER TABLE items ADD COLUMN timestamp_origin TEXT NOT NULL DEFAULT 'legacy-unknown'")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_items_user ON items(user_id, status)")
             conn.execute(
                 """
@@ -439,14 +515,16 @@ class MemoryStore:
                 (user_id,),
             ).fetchone()[0]
             for i, (msg, emb) in enumerate(zip(messages, embeddings)):
-                ts = msg.get("timestamp") or now_ms
+                provided_timestamp = msg.get("timestamp") is not None
+                ts = msg["timestamp"] if provided_timestamp else now_ms
                 created_at = float(ts) / 1000.0
+                timestamp_origin = "message.timestamp" if provided_timestamp else "ingestion-clock"
                 role = msg.get("role", "user")
                 content = contents[i]
                 cur = conn.execute(
-                    "INSERT INTO items(user_id,session_id,role,content,created_at,status,seq)"
-                    " VALUES(?,?,?,?,?,'active',?)",
-                    (user_id, session_id, role, content, created_at, seq + i),
+                    "INSERT INTO items(user_id,session_id,role,content,created_at,timestamp_origin,status,seq)"
+                    " VALUES(?,?,?,?,?,?,'active',?)",
+                    (user_id, session_id, role, content, created_at, timestamp_origin, seq + i),
                 )
                 rid = cur.lastrowid
                 conn.execute(
@@ -582,6 +660,13 @@ class MemoryStore:
             conn, user_id, qvec, top_k,
             1.0 if _current_query(query) else 0.0, query,
         )
+        scoped_attribute = next((row.get("requested_attribute") for row in raw
+                                 if row.get("requested_attribute")), None)
+        if scoped_attribute:
+            predicates = {scoped_attribute, "nickname"} if scoped_attribute == "name" else {scoped_attribute}
+            structured = [evidence for evidence in structured
+                          if evidence.get("subject") == "self"
+                          and evidence.get("predicate") in predicates]
         complete_sources: dict[int, dict] = {}
         for evidence in structured:
             rid = evidence.get("source_rid")
@@ -621,14 +706,16 @@ class MemoryStore:
                 shared_topics = (fact_layer._context_tokens(query)
                     & fact_layer._context_tokens(correction["content"])
                     & fact_layer._context_tokens(evidence["content"]))
-                if (evidence["id"].startswith("rule_")
-                        and evidence.get("seq", float("inf")) < correction["seq"]
-                        and len(shared_topics) >= 2):
+                earlier_property = bool(scoped_attribute and evidence.get("subject") == "self"
+                    and evidence.get("predicate") in ({scoped_attribute,"nickname"} if scoped_attribute == "name" else {scoped_attribute})
+                    and evidence.get("role") == correction.get("role"))
+                if (evidence.get("seq", float("inf")) < correction["seq"]
+                        and (earlier_property or (evidence["id"].startswith("rule_") and len(shared_topics) >= 2))):
                     evidence["content"] = (
-                        "[EARLIER RELATED INSTRUCTION; later explicit correction quoted above; "
+                        "[EARLIER RELATED SOURCE; later explicit correction quoted above; "
                         "do not assume unchanged applicability]\n" + evidence["content"]
                     )
-                    evidence["id"] = _structured_id("rule", user_id, evidence["content"])
+                    evidence["id"] = _structured_id(evidence["id"].split("_",1)[0], user_id, evidence["content"])
             leading.insert(0, correction)
         head_count = min(reserve, max(0, top_k - len(leading)))
         out = leading + raw[:head_count] + supplementary + raw[head_count:]
@@ -661,7 +748,7 @@ class MemoryStore:
             "score": score,
             "created_at": _iso(float(created_at)) if created_at is not None else _iso(time.time()),
         }
-        for key in ("source_rid", "session_id", "seq", "role", "status"):
+        for key in ("source_rid", "session_id", "seq", "role", "status", "subject", "predicate"):
             if key in evidence:
                 result[key] = evidence[key]
         return result
@@ -680,7 +767,7 @@ class MemoryStore:
         if limit <= 0:
             return []
         rows = conn.execute(
-            "SELECT i.rid, i.session_id, i.role, i.content, i.created_at, i.seq, v.embedding FROM items i"
+            "SELECT i.rid, i.session_id, i.role, i.content, i.created_at, i.timestamp_origin, i.seq, v.embedding FROM items i"
             " JOIN vec_items v ON v.rowid = i.rid"
             " WHERE i.user_id = ? AND i.status = 'active' ORDER BY i.seq, i.rid",
             (user_id,),
@@ -715,52 +802,77 @@ class MemoryStore:
                   if row["rid"] not in excluded]
         ranked.sort(key=lambda pair: pair[0], reverse=True)
 
-        scope, topics = fact_layer.context_scope(query)
-        if scope == "topic-scoped" and topics:
-            # A narrow project summary must not fill its remaining slots with
-            # unrelated personal records. Keep matching sessions so that a
-            # follow-up observation may omit the topic nouns without vanishing.
-            by_session: dict[str, int] = {}
+        attribute_quotes: dict[int, str] = {}
+        attribute_corrections: set[int] = set()
+        requested_attribute = _single_personal_attribute(query)
+        if requested_attribute:
+            predicates = {requested_attribute}
+            if requested_attribute == "name":
+                predicates.add("nickname")
+            attribute_words = fact_layer._tokens(fact_layer._ATTRIBUTE_TERMS.get(requested_attribute, ""))
+            direct_self = re.compile(
+                r"\bmy\s+(?:" + "|".join(re.escape(word) for word in attribute_words if word.isascii())
+                + r")\b|我的(?:" + "|".join(re.escape(word) for word in attribute_words if not word.isascii()) + ")", re.I,
+            )
             for _, row in ranked:
-                overlap = len(topics & fact_layer._context_tokens(row["content"]))
-                by_session[row["session_id"]] = max(by_session.get(row["session_id"], 0), overlap)
-            best_overlap = max(by_session.values(), default=0)
-            if best_overlap:
-                threshold = max(1, math.ceil(best_overlap * .6))
-                related = {session for session, overlap in by_session.items() if overlap >= threshold}
-                best_similarity = ranked[0][0] if ranked else 0.0
-                ranked = [pair for pair in ranked if pair[1]["session_id"] in related
-                          or best_similarity - pair[0] <= .12]
+                if not fact_layer._speaker_relevant({
+                    "subject": "self", "predicate": requested_attribute, "role": row["role"],
+                }, query):
+                    continue
+                sentences = fact_layer._source_sentences(row["content"])
+                matched = []
+                for sentence in sentences:
+                    correction = bool(_CORRECTION_CUE.search(sentence) and direct_self.search(sentence))
+                    if correction or any(fact.subject == "self" and fact.predicate in predicates
+                                         for fact in fact_layer.extract_facts(sentence)):
+                        matched.append(sentence)
+                        if correction:
+                            attribute_corrections.add(row["rid"])
+                if matched:
+                    attribute_quotes[row["rid"]] = "\n".join(matched)
+            # Apply only when explicit source assertions establish the requested
+            # attribute. Unknown paraphrases/languages retain semantic fallback.
+            if attribute_quotes:
+                ranked = [pair for pair in ranked if pair[1]["rid"] in attribute_quotes]
 
-        if scope == "ordinary" and _FACT_LOOKUP.search(query) and not _sequence_query(query):
-            # Top K is a maximum, not a request to pad a precise answer with
-            # arbitrary history. Only a pronounced semantic separation plus
-            # lexical support for the head enables this conservative cutoff.
-            topic = fact_layer._context_tokens(query)
-            best_overlap = max((len(topic & fact_layer._context_tokens(row["content"]))
-                                for _, row in ranked[:3]), default=0)
-            if best_overlap >= 2:
-                for index in range(1, min(32, len(ranked))):
-                    if ranked[index - 1][0] - ranked[index][0] >= .35:
-                        needed = max(2, math.ceil(best_overlap * .6))
-                        ranked = ranked[:index] + [pair for pair in ranked[index:]
-                            if len(topic & fact_layer._context_tokens(pair[1]["content"])) >= needed]
-                        break
+        scope, topics = fact_layer.context_scope(query)
+        context_quotes: dict[int, str] = {}
+        if scope == "topic-scoped" and topics:
+            # Share exactly the same scope selector as compact source views.
+            # It can retain a schema's following observation block without
+            # admitting every unrelated record in the same session.
+            selected_units = fact_layer.context_units_for_query(
+                [dict(row) for row in rows], query,
+            )
+            by_source: dict[int, list[str]] = {}
+            for unit in selected_units:
+                by_source.setdefault(unit["source_rid"], []).append(unit["text"])
+            if by_source:
+                best_similarity = ranked[0][0] if ranked else 0.0
+                ranked = [pair for pair in ranked if pair[1]["rid"] in by_source
+                          or best_similarity - pair[0] <= .12]
+                for _, row in ranked:
+                    if row["rid"] in by_source:
+                        quote = "\n".join(by_source[row["rid"]])
+                        context_quotes[row["rid"]] = (
+                            row["content"] if _norm_text(quote) == _norm_text(row["content"]) else quote
+                        )
 
         correction_rids: set[int] = set()
         if ranked and not _chronology_query(query):
             topic = fact_layer._context_tokens(query)
             best_similarity = ranked[0][0]
             corrections = [pair for pair in ranked
-                if best_similarity - pair[0] <= .15 and _CORRECTION_CUE.search(pair[1]["content"])
-                and len(topic & fact_layer._context_tokens(pair[1]["content"])) >= 2]
+                if pair[1]["rid"] in attribute_corrections or (
+                    best_similarity - pair[0] <= .15 and _CORRECTION_CUE.search(pair[1]["content"])
+                    and len(topic & fact_layer._context_tokens(pair[1]["content"])) >= 2)]
             if corrections:
                 correction = max(corrections, key=lambda pair: (pair[1]["seq"], pair[1]["rid"]))
                 ranked.remove(correction)
                 ranked.insert(0, correction)
                 correction_rids.add(correction[1]["rid"])
 
-        if ranked and _INITIAL_QUERY.search(query):
+        if ranked and _original_state_query(query):
             # An explicit request for the original value can be answered by a
             # later description with very similar embedding vocabulary. Prefer
             # the first source only inside the same lexical topic and a bounded
@@ -812,7 +924,10 @@ class MemoryStore:
         if chronology and limit >= 3:
             sessions: dict[str, list[tuple[float, sqlite3.Row]]] = {}
             positions: dict[int, int] = {}
+            eligible_rids = {row["rid"] for _, row in ranked}
             for row, sim in zip(rows, sims):
+                if scope != "ordinary" and row["rid"] not in eligible_rids:
+                    continue
                 members = sessions.setdefault(row["session_id"], [])
                 positions[row["rid"]] = len(members)
                 members.append((float(sim), row))
@@ -835,25 +950,39 @@ class MemoryStore:
                 break
         results = []
         for score, row in selected:
-            content = row["content"]
+            content = attribute_quotes.get(row["rid"], context_quotes.get(row["rid"], row["content"]))
             stored_at = _iso(row["created_at"])
+            timestamp_origin = row["timestamp_origin"]
+            anchor = stored_at if timestamp_origin == "message.timestamp" else None
+            time_note = (
+                "provided record timestamp may anchor relative expressions, not event occurrence time"
+                if anchor is not None else
+                "no provided temporal anchor; do not resolve relative dates from ingestion time"
+            )
             session = json.dumps(row["session_id"], ensure_ascii=False)
-            excerpted = len(content) > 3200
-            source_chars = len(content)
+            long_content = len(content) > 3200
+            excerpted = long_content or content != row["content"]
+            source_chars = len(row["content"])
+            if long_content:
+                content = _query_preview(content, query)
             if excerpted:
                 content = (
                     "[QUERY-FOCUSED SOURCE EXCERPTS; additional source text omitted; "
-                    "complete source retained at source_rid]\n" + _query_preview(content, query)
+                    "complete source retained at source_rid]\n" + content
                 )
             content = (
                 f"[SOURCE source_rid={row['rid']} session={session} seq={row['seq']} "
-                f"role={row['role']} stored_at={stored_at}; "
-                "stored record timestamp, not event occurrence time]\n" + content
+                f"role={row['role']} recorded_at={stored_at} timestamp_origin={timestamp_origin}; "
+                + time_note + "]\n" + content
             )
             result = {"id": f"mem_{row['rid']}", "content": content,
                       "score": round(0.5 + 0.4 * score, 6), "created_at": stored_at}
             result.update(source_rid=row["rid"], session_id=row["session_id"],
-                          seq=row["seq"], role=row["role"], stored_at=stored_at)
+                          seq=row["seq"], role=row["role"], stored_at=stored_at,
+                          recorded_at=stored_at, timestamp_origin=timestamp_origin,
+                          relative_time_anchor=anchor)
+            if row["rid"] in attribute_quotes:
+                result["requested_attribute"] = requested_attribute
             if row["rid"] in correction_rids:
                 result["explicit_correction"] = True
             if excerpted:
@@ -901,4 +1030,6 @@ def _flatten_content(part) -> str:
 
 
 def _iso(ts: float) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+    instant = datetime.fromtimestamp(ts, timezone.utc)
+    precision = "seconds" if instant.microsecond == 0 else "milliseconds"
+    return instant.isoformat(timespec=precision).replace("+00:00", "Z")

@@ -31,7 +31,7 @@ def raw_literal(row: dict) -> str:
     label, newline, body = row["content"].partition("\n")
     match = re.fullmatch(
         r'\[SOURCE source_rid=(\d+) session=(.+) seq=(\d+) role=([^\s;]+) '
-        r'stored_at=([^;]+); stored record timestamp, not event occurrence time\]',
+        r'recorded_at=([^\s;]+) timestamp_origin=(message\.timestamp|ingestion-clock|legacy-unknown); ([^\]]+)\]',
         label,
     )
     assert newline and match, "raw result must have one valid SOURCE label"
@@ -39,7 +39,14 @@ def raw_literal(row: dict) -> str:
     assert row["session_id"] == json.loads(match[2])
     assert row["seq"] == int(match[3])
     assert row["role"] == match[4]
-    assert row["stored_at"] == row["created_at"] == match[5]
+    assert row["stored_at"] == row["created_at"] == row["recorded_at"] == match[5]
+    assert row["timestamp_origin"] == match[6]
+    if row["timestamp_origin"] == "message.timestamp":
+        assert row["relative_time_anchor"] == row["recorded_at"]
+        assert match[7] == "provided record timestamp may anchor relative expressions, not event occurrence time"
+    else:
+        assert row["relative_time_anchor"] is None
+        assert match[7] == "no provided temporal anchor; do not resolve relative dates from ingestion time"
     assert row["id"] == f'mem_{row["source_rid"]}'
     return body
 

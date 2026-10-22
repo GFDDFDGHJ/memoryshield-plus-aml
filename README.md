@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **2026.10.22-rc3**. Repository:
+Candidate version: **2026.10.22-rc4**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -24,6 +24,8 @@ updated to the same version, then pass the official Smoke before Full.
 - Exact lookups prioritize relevant source evidence. A temporal restriction
   such as "before" does not globally reorder all results by insertion time.
   Explicit sequence requests include bounded neighboring turns in source order.
+  A large embedding-score gap does not permanently discard the remaining
+  evidence: an independent cause or intermediate source can use different words.
 - Each raw result identifies its source row, session, sequence, role, and storage
   timestamp. De-duplication merges the same source row across retrieval layers;
   distinct source rows remain distinct even when text and timestamps match.
@@ -32,18 +34,27 @@ updated to the same version, then pass the official Smoke before Full.
   unknown roles are repaired lazily from their original sources for the current
   user's affected attribute; genuine retractions remain retracted.
 - Summary evidence is assembled from original source messages at query time.
-  Topic requests exclude unrelated sessions while retaining connected evidence;
+  Topic requests select source spans while retaining connected evidence;
   global requests can cover all sessions. Repeated numeric observations are
   retained with provenance. When needed, a reversible literal template compacts
   repeated wording without estimating statistics or dropping numeric precision.
   Coverage and any truncation are explicitly disclosed.
+- Summary, comparison, aggregate, and sequence requests share an intent decision
+  across retrieval layers. Matched schemas and contiguous numeric observations
+  retain their relationship across message boundaries; a new topic, speaker,
+  or session ends that data block. Table excerpts keep their column meanings.
 - Raw messages remain complete in storage. Search uses query-centered excerpts
   for long messages, retains adjacent conditions/exceptions, and labels partial
   evidence. Returned `content` has a total 32,000-character budget at complete
   result boundaries. `top_k` is an upper bound, not a requirement to pad results.
 - Applicable global execution constraints accompany rule requests; topic-specific
-  business rules stay scoped. Source timestamps are recording metadata, not
-  inferred event dates. Current-state assertions carry explicit history labels.
+  business rules stay scoped. Explicit single-property personal queries use
+  positive source assertions to limit context; unknown formulations retain
+  semantic fallback. This is not a blanket privacy guarantee.
+- Caller-provided record timestamps may anchor relative language. Ingestion-clock
+  and unknown legacy timestamps are explicitly distinguished and do not become
+  event-date anchors. Source tables preserve each record's time without inventing
+  event chronology. Current-state assertions carry explicit history labels.
 - Identical `(user_id, request_id)` retries are idempotent across restarts.
   Different content or session with that key returns HTTP 409.
 - The legacy substring-based governance feature is disabled by default.
@@ -104,7 +115,7 @@ override it. See [Alibaba quota documentation](https://help.aliyun.com/zh/model-
 | `EMBEDDING_API_KEY` | Project secret or `DASHSCOPE_API_KEY` |
 | `AML_DB_PATH` | Project-local `aml_text_v4.db` |
 | `AML_AUTH_TOKEN` | `.secrets/aml_auth_token.txt` |
-| `AML_VERSION` | `2026.10.22-rc3` |
+| `AML_VERSION` | `2026.10.22-rc4` |
 | `AML_RECENCY_WEIGHT` | `0.10` |
 | `AML_GOVERNANCE` | `false` |
 | `AML_HOST` / `AML_PORT` | `0.0.0.0` / `8080` |
@@ -161,8 +172,12 @@ python test_fact_quality.py
 python test_store_quality.py
 python test_context_facts.py
 python test_prefix_retrieval.py
+python test_temporal_context.py
+python test_scope_consistency.py
+python test_schema_context_blocks.py
 python evaluate_quality.py --source-root . --output tmp/quality-candidate.json
 python evaluate_context_quality.py --source-root . --output tmp/context-candidate.json
+python evaluate_capabilities.py --source-root . --output tmp/capabilities.json
 ```
 
 Tests cover isolation, retry/conflict/concurrent writes, transaction rollback,
@@ -171,24 +186,28 @@ batching/order/shape, rule semantics, fact history, authentication, and request
 auditing without content. They do not measure leaderboard quality or replace
 the official Smoke.
 
-The previous rc2 release scored **61.34** in official Smoke, below the earlier
-65.23 result. In particular, explicit fact recall fell from 100 to 80. This
-release addresses independently reproduced retrieval failures; it has no new
-official score yet.
+Smoke covers a limited subset and is not the optimization target. The new fixed
+capability evaluator contains 47 invented scenarios across nine families, checks
+8k/16k visible evidence with Top K 100, and reports coverage, quotation/source
+consistency, context contamination, ranking, and incremental/batch equivalence.
+These budgets are stress checks, not asserted AML platform limits. Strict
+scenario counts are diagnostic proxies, not official capability scores.
 
-On a fixed, independently authored synthetic context evaluation, rc2 passed
-15/27 checks and rc3 passed 27/27 (17 scenarios). It requests `top_k=100` and
-checks whether needed evidence appears within the first 8,000 and 16,000
-characters. These are stress-test budgets, not claimed platform limits. A
-separate four-case synthetic comparison with shared real `text-embedding-v4`
-vectors improved from 1/4 to 4/4; the existing seven real-vector controls also
-passed. Cached runs make no provider calls. Neither comparison reads official
-evaluation conversations or answers, and neither predicts a Smoke score.
+Read [EVALUATION.md](EVALUATION.md) for comparison procedures and limitations.
+The same fixtures can be compared using a shared real embedding cache:
 
-The eight local test scripts above pass 171 checks. The older evidence evaluator
-v2 passes 37/37; its source-identity check explicitly preserves separate real
-observations while `request_id` handles retries. Source-driven summary context
-does not depend on rebuilding cached session digests.
+```powershell
+python evaluate_capabilities.py --export-fixtures tmp/capability-fixtures.json
+# Set EMBEDDING_API_KEY or DASHSCOPE_API_KEY in the environment first.
+python prepare_capability_vectors.py --fixtures tmp/capability-fixtures.json --output tmp/capability-vectors.json --prepare
+python evaluate_capabilities.py --source-root . --vectors-cache tmp/capability-vectors.json --output tmp/capabilities-real.json
+```
+
+Only the explicit `--prepare` step contacts the provider, using the exported
+invented texts. Cached comparisons disable network access. No comparison uses
+official conversations or answers. Preserve the earlier evaluators as regression
+controls and record disagreements; do not optimize a single combined pass count.
+Source-driven context does not depend on rebuilding cached session digests.
 
 ## Deployment and submission
 
@@ -200,7 +219,7 @@ tunnel names change after restarts and require updating the AML API binding.
 
 This Windows deployment keeps the existing public origin
 `https://hlq5070.tail50f4d4.ts.net` and the same `/add` and `/search` paths.
-`watcher.ps1` supervises the rc3 API. It pins Beijing `text-embedding-v4`, 1024
+`watcher.ps1` supervises the rc4 API. It pins Beijing `text-embedding-v4`, 1024
 dimensions, and `aml_text_v4.db`; health probes verify version and model. A
 lifetime file lock prevents duplicate supervisors. Launch the watcher outside
 the interactive tool process; the current host uses `Win32_Process.Create`.
@@ -214,6 +233,8 @@ connection with `curl --resolve`, retaining hostname and certificate checks.
 This bypasses local Tailscale MagicDNS, which can otherwise make an internal
 success look like a public availability check. State changes are recorded in
 the service log. Public-check failures do not restart a healthy local API.
+Deploy before starting an evaluation and keep code fixed until it completes.
+Request audit records include the runtime version without query/message content.
 
 Before Full:
 

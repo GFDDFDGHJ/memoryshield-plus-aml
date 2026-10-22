@@ -144,7 +144,8 @@ class StoreQualityTests(unittest.TestCase):
         self.assertEqual([row["seq"] for row in results], [2, 3, 4])
         for row in results:
             self.assertEqual(row["session_id"], "session")
-            self.assertIn("stored_at=", row["content"])
+            self.assertIn("recorded_at=", row["content"])
+            self.assertIn("timestamp_origin=message.timestamp", row["content"])
             self.assertIn("not event occurrence time", row["content"])
 
     def test_neighbor_expansion_does_not_cross_sessions(self):
@@ -182,9 +183,11 @@ class StoreQualityTests(unittest.TestCase):
         self.vector(other, .20)
         self.add([relevant, other])
         results = self.memory.search("target", "What is the launch access code?", 2)
+        # A precise lookup must lead with the exact source. Do not require
+        # permanent removal of lower-ranked records: that earlier behavior
+        # deleted independent causes under paraphrased multi-evidence queries.
         self.assertEqual(raw_literal(results[0]), relevant)
-        # Top K is a maximum: unrelated history need not pad an exact lookup.
-        self.assertEqual([raw_literal(row) for row in results], [relevant])
+        self.assertTrue(all(raw_literal(row) in {relevant, other} for row in results))
         self.assertLessEqual(len(results), 2)
 
     def test_order_number_lookup_is_not_a_chronology_query(self):

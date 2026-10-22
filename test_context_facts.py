@@ -40,7 +40,7 @@ class ContextFactsTests(unittest.TestCase):
             self.add(f"Decision code alphabet{idx} was retained.",f"s{idx}")
         result = "\n".join(self.context("Summarize across all sessions."))
         for idx in range(22):
-            self.assertIn(f"session=s{idx} ",result)
+            self.assertIn(f'session="s{idx}"',result)
         self.assertIn("included=22/22",result)
 
     def test_full_numeric_context_is_compact_and_update_sensitive(self):

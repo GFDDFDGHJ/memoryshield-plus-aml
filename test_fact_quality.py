@@ -84,7 +84,7 @@ class EvidenceQualityTests(unittest.TestCase):
         combined = F.get_digests(self.conn, "user", "summarize across all sessions", 2)
         self.assertLessEqual(len(combined), 2)
         for index in range(15):
-            self.assertIn(f"session=session-{index:02d}", "\n".join(combined))
+            self.assertIn(f'session="session-{index:02d}"', "\n".join(combined))
 
     def test_digest_matching_ignores_metadata_and_isolates_users(self):
         self.add("Only the orchard was inspected.")

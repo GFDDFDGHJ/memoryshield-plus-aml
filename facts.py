@@ -21,6 +21,7 @@ which did LIKE '%<topic>%' and hid 1480 of 3974 rows because it extracted
 """
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import time
@@ -644,6 +645,11 @@ def _has_items(conn: sqlite3.Connection) -> bool:
     ).fetchone() is not None
 
 
+def _timestamp_column(conn: sqlite3.Connection) -> str:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(items)")}
+    return "timestamp_origin" if "timestamp_origin" in columns else "'legacy-unknown' AS timestamp_origin"
+
+
 def _resolve_legacy_roles(conn: sqlite3.Connection, user_id: str, subject: str, predicate: str,
                           *, before_seq: int | None = None) -> None:
     """Repair one legacy key only when its retained source proves a role.
@@ -719,26 +725,43 @@ def _recorded_time(value: float | None) -> str:
         return "unknown"
 
 
+def _metadata_value(value, *, json_string: bool = False) -> str:
+    text=str(value)
+    if json_string or re.search(r"[\s|\[\];]",text):
+        return (json.dumps(text,ensure_ascii=False).replace("|",r"\u007c")
+                .replace("[",r"\u005b").replace("]",r"\u005d")
+                .replace("\u0085",r"\u0085").replace("\u2028",r"\u2028").replace("\u2029",r"\u2029"))
+    return text
+
+
 def _source_label(row: dict) -> str:
     """A stored timestamp is provenance, never an inferred event date."""
     rid = row.get("source_rid")
+    recorded = _recorded_time(row.get('created_at'))
+    origin = row.get("timestamp_origin") or "legacy-unknown"
+    anchor = recorded if origin == "message.timestamp" else "none"
     return (
         f"[SOURCE source_rid={rid if rid is not None else 'unknown'}"
-        f" session={row.get('session_id', 'unknown')} seq={row.get('seq', 'unknown')}"
-        f" role={row.get('role', 'unknown')} recorded_at={_recorded_time(row.get('created_at'))}]"
+        f" session={_metadata_value(row.get('session_id', 'unknown'))} seq={row.get('seq', 'unknown')}"
+        f" role={_metadata_value(row.get('role', 'unknown'))} recorded_at={recorded}"
+        f" timestamp_origin={origin} relative_time_anchor={anchor}]"
     )
 
 
 def _with_source(conn: sqlite3.Connection, row: sqlite3.Row | dict, has_items: bool) -> dict:
     result = dict(row)
     result["role"] = result.get("source_role") or "unknown"
-    if result["role"] == "unknown" and has_items and result.get("source_rid") is not None:
+    result["timestamp_origin"] = "legacy-unknown"
+    if has_items and result.get("source_rid") is not None:
         source = conn.execute(
-            "SELECT role FROM items WHERE user_id=? AND rid=?",
+            "SELECT role,created_at," + _timestamp_column(conn) + " FROM items WHERE user_id=? AND rid=?",
             (result["user_id"], result["source_rid"]),
         ).fetchone()
         if source:
-            result["role"] = source["role"]
+            if result["role"] == "unknown":
+                result["role"] = source["role"]
+            result["created_at"] = source["created_at"]
+            result["timestamp_origin"] = source["timestamp_origin"] or "legacy-unknown"
     return result
 
 
@@ -1145,7 +1168,8 @@ _SOURCE_SENTENCES = re.compile(r".+?(?:[。！？!?]|\.(?!\d)(?=\s|$)|\n+|$)", r
 
 def _source_sentences(text: str) -> list[str]:
     """Extract source wording without splitting numeric decimals into facts."""
-    return [re.sub(r"\s+", " ", match.group(0)).strip()
+    # Tabs can delimit measured columns, so retain them as source structure.
+    return [re.sub(r"[^\S\t]+", " ", match.group(0)).strip()
             for match in _SOURCE_SENTENCES.finditer(text) if match.group(0).strip()]
 
 
@@ -1169,7 +1193,7 @@ def update_digest(conn: sqlite3.Connection, user_id: str, session_id: str, max_l
     non-occurrences, and stored timestamps are not presented as event dates.
     """
     rows = conn.execute(
-        "SELECT rid,session_id,role,content,created_at,seq FROM items"
+        "SELECT rid,session_id,role,content,created_at,seq," + _timestamp_column(conn) + " FROM items"
         " WHERE user_id=? AND session_id=? AND status='active' ORDER BY seq,rid",
         (user_id, session_id),
     ).fetchall()
@@ -1273,11 +1297,16 @@ _CONTEXT_FILLER = frozenset((
     "please give provide show tell write draft explain find use based using data result "
     "results observation observations trial trials record records history session sessions "
     "conversation conversations discussed entire complete whole so far latest earlier "
-    "all each every including following information describe review list".split()
+    "all each every including following information describe review list "
+    "know known knowing remember remembered learn learned learnt myself ourselves "
+    "main key takeaway takeaways highlight highlights insight insights comprehensive "
+    "integrated synthesis synthesize synthesise salient our prior previous past "
+    "timeline chronology chronological sequence order event events stage stages step steps".split()
 ))
 _CONTEXT_PHRASES = re.compile(
     r"(?:请帮我|帮我|请|总结|汇总|总体|全部|一共|多少|规律|趋势|整体|回顾|比较|"
-    r"计算|平均|模拟|预测|估算|概率|所有|各次|每次|历史|记录|会话|讨论|数据|观测|结果|报告)", re.I,
+    r"计算|平均|模拟|预测|估算|概率|所有|各次|每次|历史|记录|会话|讨论|数据|观测|结果|报告|"
+    r"了解|知道|记得|记住|关于我|对我|主要|要点|概况|情况|时间线|先后|顺序|轨迹)", re.I,
 )
 _AGGREGATE_QUERY = re.compile(
     r"\b(?:average|mean|median|sum|count|calculate|compute|frequency|probabilit\w*|"
@@ -1288,6 +1317,14 @@ _GLOBAL_CONTEXT = re.compile(
     r"\b(?:all|entire|whole)\s+(?:(?:my|our|the|previous|past)\s+)?(?:history|sessions|conversations|topics)\b"
     r"|\beverything\s+(?:we|i|you|discussed|so\s+far)\b"
     r"|(?:全部|所有|整个|完整).{0,6}(?:历史|会话|对话|话题)|跨(?:全部|所有)?会话|至今(?:讨论|聊过)", re.I,
+)
+_CONTEXT_REQUEST = re.compile(
+    r"\b(?:summary|summari[sz]e|overview|recap|overall|everything|across|compare|patterns?|trends?|"
+    r"takeaways?|highlights?|synthesis|synthesi[sz]e|timeline|chronology|chronological|sequence)\b"
+    r"|\b(?:how\s+many|in\s+total|all\s+of|across\s+(?:all\s+)?sessions)\b"
+    r"|\bin\s+(?:what|which)\s+order\b"
+    r"|总结|汇总|概述|综述|总览|要点|总体|全部|一共|多少|规律|趋势|整体|回顾|比较|时间线|先后|顺序|轨迹",
+    re.I,
 )
 
 
@@ -1302,10 +1339,12 @@ def _context_tokens(text: str) -> set[str]:
 def context_scope(query: str) -> tuple[str, set[str]]:
     """Shared intent and topical vocabulary for downstream raw filtering."""
     topics = _context_tokens(query)
-    requested = any(word in query.lower() for word in _SUMMARY_WORDS) or bool(_AGGREGATE_QUERY.search(query))
+    requested = bool(_CONTEXT_REQUEST.search(query) or _AGGREGATE_QUERY.search(query))
     if not requested:
         return "ordinary", topics
-    return ("global" if _GLOBAL_CONTEXT.search(query) or not topics else "topic-scoped"), topics
+    # A quantifier ranges over the requested topic, rather than erasing it:
+    # 'all sessions about the turbine' still excludes unrelated personal data.
+    return ("global" if not topics else "topic-scoped"), topics
 
 
 def _bridge_sessions(units: list[dict], selected: set[str]) -> set[str]:
@@ -1317,7 +1356,10 @@ def _bridge_sessions(units: list[dict], selected: set[str]) -> set[str]:
     entities, topical = {}, {}
     ignore = {"the","this","that","these","those","always","never","please","source","if","when","where","what","how","who","which"}
     for unit in units:
-        names = {word.casefold() for word in re.findall(r"\b[A-Z][A-Za-z0-9_-]{2,}\b",unit["text"])} - ignore
+        # A leading field/heading label is markup, not a named entity join.
+        # Exclude the syntactic position rather than listing particular labels.
+        entity_text = re.sub(r"(?m)^[ \t]*(?:\#{1,6}[ \t]*)?(?:[A-Z][A-Za-z0-9_-]*[ \t]+){0,3}[A-Z][A-Za-z0-9_-]*[ \t]*[:：][ \t]*", "",unit["text"])
+        names = {word.casefold() for word in re.findall(r"\b[A-Z][A-Za-z0-9_-]{2,}\b",entity_text)} - ignore
         entities.setdefault(unit["session_id"],set()).update(names)
         topical[unit["session_id"]] = max(topical.get(unit["session_id"],0),unit.get("overlap",0))
     selected = set(selected)
@@ -1354,20 +1396,103 @@ def _numeric_slots(text: str, count: int) -> list[str]:
     return [prefix+str(index+1) for index in range(count)]
 
 
+_RELATIVE_SOURCE_TIME = re.compile(
+    r"\b(?:yesterday|today|tomorrow|tonight|(?:last|next|this)\s+(?:day|week|month|year|morning|evening|night)|\d+\s+(?:days?|weeks?|months?|years?)\s+ago)\b"
+    r"|昨天|今天|明天|昨晚|今晚|明晚|上周|下周|本周|上个月|下个月|今年|明年|去年|前天|后天|\d+[天周月年]前", re.I,
+)
+_TEMPORAL_TOPIC = frozenset("date dates time times schedule schedules calendar calendars deadline deadlines interval intervals when".split())
+_TEMPORAL_QUERY = re.compile(r"\b(?:dates?|times?|schedules?|calendars?|deadlines?|intervals?)\b|日期|时间|日程|何时|间隔",re.I)
+_DATE_LITERAL = re.compile(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b|\d{4}年\d{1,2}月|\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}\b",re.I)
+_CONTEXT_QUALIFIER = re.compile(r"^(?:except|unless|however|but|only|provided|if|when|otherwise|do\s+not|never)\b|^(?:除非|但是|不过|否则|例外|仅|只有|不要|禁止|如果|当)",re.I)
+
+
+def _context_metadata(units: list[dict]):
+    """Share constants, but retain an invertible timestamp for every source."""
+    sessions = {str(unit.get("session_id","unknown")) for unit in units}
+    roles = {str(unit.get("role","unknown")) for unit in units}
+    origins = {unit.get("timestamp_origin") or "legacy-unknown" for unit in units}
+    def stamp(unit):
+        try:
+            value=float(unit.get("created_at"))
+            return value if value == value and abs(value) != float("inf") else None
+        except (TypeError,ValueError,OverflowError):
+            return None
+    times = {stamp(unit) for unit in units}
+    base = next((stamp(unit) for unit in units if stamp(unit) is not None),None)
+    variable_time = len(times) > 1
+    shared = []
+    columns = []
+    if len(sessions) == 1:
+        shared.append("session="+_metadata_value(next(iter(sessions))))
+    else:
+        columns.append("session")
+    if len(roles) == 1:
+        shared.append("role="+_metadata_value(next(iter(roles))))
+    else:
+        columns.append("role")
+    if variable_time:
+        shared.append(f"recorded_at_base={_recorded_time(base)} base_epoch={repr(base)}")
+        columns.append("recorded_at_offset_s")
+    else:
+        shared.append("recorded_at="+_recorded_time(base))
+    if len(origins) == 1:
+        shared.append("timestamp_origin="+next(iter(origins)))
+    else:
+        columns.append("timestamp_origin_code")
+    anchored = any(_RELATIVE_SOURCE_TIME.search(unit["text"]) for unit in units)
+    if anchored:
+        columns.append("relative_time_anchor")
+    header = "[SOURCE " + " ".join(shared) + "; source_rid@seq/segment identifies original records]"
+    if variable_time:
+        header += "\nEach recorded_at = base_epoch + recorded_at_offset_s seconds (UTC)."
+    if len(origins) > 1:
+        header += "\nOrigin codes: M=message.timestamp, I=ingestion-clock, U=legacy-unknown."
+    header += "\nOnly message.timestamp may anchor relative expressions; ingestion-clock and legacy-unknown are metadata, not inferred event dates."
+    def metadata(unit):
+        values=[]
+        if len(sessions) > 1:
+            values.append("session="+_metadata_value(unit.get("session_id","unknown"),json_string=True))
+        if len(roles) > 1:
+            values.append("role="+_metadata_value(unit.get("role","unknown"),json_string=True))
+        if variable_time:
+            current=stamp(unit)
+            delta=current-base if current is not None and base is not None else None
+            values.append(str(int(delta)) if delta is not None and delta.is_integer() else repr(delta))
+        origin=unit.get("timestamp_origin") or "legacy-unknown"
+        if len(origins) > 1:
+            values.append({"message.timestamp":"M","ingestion-clock":"I","legacy-unknown":"U"}.get(origin,origin))
+        if anchored:
+            values.append(_recorded_time(stamp(unit)) if origin == "message.timestamp" and _RELATIVE_SOURCE_TIME.search(unit["text"]) else "none")
+        return values
+    return header,columns,metadata
+
+
 def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list[str]:
     """Losslessly share repeated numeric wording while retaining each source.
 
     Literal templates keep signs, precision, conditions and units exactly as
     written. Rows remain separate observations, even for identical values.
     """
+    # Validity restrictions qualify the data that follows. Quote their real
+    # source first so a consumer's prefix cannot read a sampled numeric block
+    # as usable evidence while missing its later withdrawal.
+    units=sorted(units,key=lambda unit:not unit.get('context_qualification',False))
+    if not compact_numeric:
+        source,metadata_columns,metadata = _context_metadata(units)
+        lines=[source,"Columns: source_rid@seq/segment"
+               + "".join(" | "+column for column in metadata_columns) + " | literal source text"]
+        for unit in units:
+            values=[f"{unit['source_rid']}@{unit['seq']}/{unit['segment']}"] + metadata(unit) + [unit["text"]]
+            lines.append(" | ".join(values))
+        return ["\n".join(lines)]
     groups = {}
     for unit in units:
         template, values = _numeric_template(unit["text"])
-        key = (unit["session_id"], unit["role"], template)
+        key = (unit["role"], template)
         groups.setdefault(key, []).append((unit, values))
     pieces = []
-    for (session, role, template), members in groups.items():
-        source = f"[SOURCE session={session} role={role}; source_rid@seq/segment identifies each original source]"
+    for (role, template), members in groups.items():
+        source,metadata_columns,metadata = _context_metadata([unit for unit,_ in members])
         if compact_numeric and len(members) >= 3 and members[0][1]:
             slots = _numeric_slots(members[0][0]["text"],len(members[0][1]))
             constants = {index: values[0] for index, values in enumerate(zip(*(values for _, values in members)))
@@ -1378,15 +1503,17 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
             variable = [index for index in range(len(members[0][1])) if index not in constants]
             lines = [source, "Literal source template: " + rendered,
                      "Rows substitute original numeric strings exactly; no statistical inference. Columns: source_rid@seq/segment"
-                     + "".join(" | " + slots[index] for index in variable)]
+                     + "".join(" | " + slots[index] for index in variable)
+                     + "".join(" | " + column for column in metadata_columns)]
             for unit, values in members:
                 lines.append(f"{unit['source_rid']}@{unit['seq']}/{unit['segment']}"
-                             + "".join(" | " + values[index] for index in variable))
+                             + "".join(" | " + values[index] for index in variable)
+                             + "".join(" | " + value for value in metadata(unit)))
             pieces.append("\n".join(lines))
         else:
-            lines = [source]
+            lines = [source,"Columns: source_rid@seq/segment" + "".join(" | "+column for column in metadata_columns) + " | literal source text"]
             for unit, _ in members:
-                lines.append(f"{unit['source_rid']}@{unit['seq']}/{unit['segment']}: {unit['text']}")
+                lines.append(" | ".join([f"{unit['source_rid']}@{unit['seq']}/{unit['segment']}"] + metadata(unit) + [unit['text']]))
             pieces.append("\n".join(lines))
     return pieces
 
@@ -1398,7 +1525,7 @@ def _pack_context(units: list[dict], limit: int, budget_chars: int, scope: str) 
         return []
     header = (f"[DIGEST] {scope} source evidence; included={{included}}/{total} source segments; "
               "coverage={coverage}. Source sequence is provenance, not inferred event chronology. "
-              "Stored timestamps are available on source records, not inferred event dates.\n")
+              "Timestamp origins below determine whether relative-time anchoring is available.\n")
     chosen = units
     # The full literal-template representation is attempted before reducing
     # any evidence. Sampling is a disclosed last resort, never an aggregate.
@@ -1436,38 +1563,192 @@ def _pack_context(units: list[dict], limit: int, budget_chars: int, scope: str) 
                 return []
             return [prefix + source_label + _evidence_quote(chosen[0]["text"], allowance)]
         smaller = max(1, min(len(chosen) - 1, int(len(chosen) * budget_chars / actual * .90)))
-        chosen = [units[index] for index in _evidence_indices(total, smaller)]
+        required=[index for index,unit in enumerate(units) if unit.get('context_qualification',False)]
+        if required:
+            remaining=[index for index in range(total) if index not in set(required)]
+            count=max(0,smaller-len(required))
+            optional=[remaining[index] for index in _evidence_indices(len(remaining),count)]
+            chosen=[units[index] for index in sorted((required+optional)[:max(smaller,len(required))])]
+            if len(chosen)>=len(units) and actual>budget_chars:
+                # Qualifiers alone may be indivisible under a very small
+                # budget. Omit numeric data rather than dropping their caveat.
+                chosen=[units[required[0]]]
+        else:
+            chosen = [units[index] for index in _evidence_indices(total, smaller)]
     return []
 
 
-def get_digests(
-    conn: sqlite3.Connection, user_id: str, query: str, limit: int = 2,
-    *, budget_chars: int = 48000,
-) -> list[str]:
-    """Build bounded, query-scoped evidence from current original records.
+_NUMERIC_CELL = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?\s*(?:[%A-Za-zµμ°][A-Za-z0-9µμ°%/^²³-]{0,15})?")
+_NUMERIC_FIELD = re.compile(
+    r"[\"']?(?P<key>[^\W\d][\w./%()-]{0,40})[\"']?\s*[:=]\s*"
+    r"(?P<value>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+    r"\s*(?:[%A-Za-zµμ°][A-Za-z0-9µμ°%/^²³-]{0,15})?",re.U,
+)
+_MEASUREMENT_VALUE = re.compile(
+    r'(?P<value>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*'
+    r'(?P<unit>degrees?\s+Celsius|degrees?\s+Fahrenheit|milliseconds?|seconds?|minutes?|hours?|'
+    r'micrometers?|millimeters?|centimeters?|kilometers?|milligrams?|kilograms?|grams?|liters?|litres?|'
+    r'MPa|kPa|mbar|bar|Pa|kN|mN|N|kWh|kW|MW|mW|W|kJ|mJ|J|GHz|MHz|kHz|Hz|mV|kV|V|mA|µA|A|'
+    r'kg|mg|µg|ug|g|km|cm|mm|µm|um|m|ms|µs|us|ns|min|hr|s|h|mL|ml|µL|uL|L|l|°C|°F|℃|℉|C|K|%|'
+    r'千克|公斤|毫克|微克|克|千米|公里|厘米|毫米|微米|米|毫秒|微秒|纳秒|秒|分钟|小时|'
+    r'毫升|微升|升|摄氏度|华氏度|千帕|兆帕|帕|牛顿|瓦特|千瓦|伏特|安培|赫兹)(?![A-Za-z])',re.I,
+)
+_MEASUREMENT_SETUP = re.compile(r'\b(?:experiments?|measurements?|observations?|trials?|calibration|laboratory|readings?|test\s+data|results)\b|实验|测量|观测|校准|测定|读数',re.I)
+_DATA_REFERENCE = re.compile(r'\b(?:previous|preceding|above|earlier|these|those|all)\s+(?:\w+\s+){0,2}(?:readings?|measurements?|observations?|results?|trials?|samples?|records?|values?|data)\b|(?:上述|以上|之前|前面|这些|所有|此前).{0,8}(?:读数|测量|观测|数据|结果|样本|实验)',re.I)
+_DATA_VALIDITY = re.compile(r'\b(?:invalid|unreliable|incorrect|exclude\w*|discard\w*|disregard\w*|withdraw\w*|supersed\w*)\b|\b(?:do\s+not|must\s+not|cannot|no\s+longer)\s+use\b|无效|不可靠|错误|排除|丢弃|弃用|作废|不要使用|不能使用|不得使用|不应使用',re.I)
+_DATA_RESTRICTION = re.compile(r'\b(?:only|except|excluding)\b.*\b(?:readings?|measurements?|observations?|results?|trials?|samples?|records?|values?|data)\b|(?:仅|只用|除了).{0,20}(?:读数|测量|观测|数据|结果|样本|实验)',re.I)
+_DATA_CONDITIONS = re.compile(r'\b(?:same|identical|different|constant|controlled|changed)\s+(?:operating\s+)?conditions?\b|条件.{0,8}(?:相同|不同|一致)|(?:相同|不同|一致).{0,4}条件',re.I)
 
-    Cached twelve-line digests are a compatibility fallback only. Source
-    records remain authoritative, so later observations and corrections do
-    not disappear merely because an ingestion-time sample omitted them.
+
+def _measurement_record_shape(text: str):
+    # A short leading row label may change between measurements. It is ignored
+    # for classification only; emitted original wording is never rewritten.
+    body=re.sub(r'^[^:：\n]{1,28}[:：]\s*','',text.strip(),count=1)
+    readings=list(_MEASUREMENT_VALUE.finditer(body))
+    if len(readings)<2:
+        return None
+    template=_MEASUREMENT_VALUE.sub(lambda match:'{quantity}'+match.group('unit'),body)
+    return ('measurements',re.sub(r'\s+',' ',template),tuple(match.group('unit') for match in readings))
+
+
+def _data_record_shape(text: str):
+    return _numeric_record_shape(text) or _measurement_record_shape(text)
+
+
+def _numeric_record_shape(text: str):
+    """A data-row grammar, rather than a test for digits in free narration."""
+    body=text.strip().rstrip('.。')
+    fields=list(_NUMERIC_FIELD.finditer(body))
+    if len(fields)>=2:
+        remaining=_NUMERIC_FIELD.sub('',body)
+        conditions=[]
+        clauses=[re.sub(r'[\[\]{}()\"\']','',clause).strip() for clause in re.split(r'[,;|\t]+',remaining)]
+        for clause in clauses:
+            if not clause:
+                continue
+            assigned=re.fullmatch(r'([^\W\d][\w-]*)\s*[:=]\s*([^\W\d][\w-]*)',clause,re.U)
+            words=re.findall(r'[^\W\d][\w-]*',clause,re.U)
+            if assigned:
+                conditions.append(('category',assigned.group(1).casefold()))
+            elif 1<=len(words)<=3 and re.fullmatch(r'[^\W\d][\w-]*(?:\s+[^\W\d][\w-]*){0,2}',clause,re.U):
+                conditions.append(('label',words[-1].casefold(),len(words)))
+            else:
+                break
+        else:
+            return ('fields',tuple(sorted({match.group('key').casefold() for match in fields})),tuple(conditions))
+    for delimiter in ('|','\t',';',','):
+        cells=[cell.strip() for cell in body.strip('|').split(delimiter)]
+        numeric=tuple(bool(_NUMERIC_CELL.fullmatch(cell)) for cell in cells)
+        nominal=all(numeric[index] or re.fullmatch(r'[^\W\d][\w.-]{0,23}',cell,re.U) for index,cell in enumerate(cells))
+        if len(cells)>=2 and sum(numeric)>=2 and len(cells)-sum(numeric)<=2 and nominal:
+            return ('columns',delimiter,len(cells),numeric)
+    return None
+
+
+def _schema_declares(text: str, shape) -> bool:
+    if shape[0]=='measurements':
+        return bool(_MEASUREMENT_SETUP.search(text))
+    if shape[0]=='fields':
+        return sum(bool(re.search(r'(?<!\w)'+re.escape(key)+r'(?!\w)',text,re.I)) for key in shape[1])>=2
+    delimiter,count=shape[1:3]
+    for line in text.splitlines():
+        cells=[cell.strip() for cell in line.strip().strip('|').split(delimiter)]
+        if len(cells)==count and all(re.search(r'[^\W\d]',cell,re.U) for cell in cells):
+            return True
+    return False
+
+
+def _schema_block_closure(units: list[dict], kept: set[int]) -> set[int]:
+    """Keep an adjacent same-speaker numeric block with its declared schema."""
+    by_session={}
+    for index,unit in enumerate(units):
+        by_session.setdefault(unit['session_id'],[]).append(index)
+    expanded=set(kept)
+    for indexes in by_session.values():
+        for position,index in enumerate(indexes):
+            if index not in kept or _data_record_shape(units[index]['text']):
+                continue
+            header=units[index]
+            end=position+1
+            while end<len(indexes) and units[indexes[end]]['source_rid']==header['source_rid']:
+                end+=1
+            if end>=len(indexes):
+                continue
+            first=units[indexes[end]]
+            shape=_data_record_shape(first['text'])
+            if not shape or first['role']!=header['role'] or not _schema_declares(header['content'],shape):
+                continue
+            run=[]
+            while end<len(indexes):
+                current=units[indexes[end]]
+                if current['role']!=header['role'] or _data_record_shape(current['text'])!=shape:
+                    break
+                run.append(indexes[end]);end+=1
+            if len(run)<3:
+                continue
+            expanded.update(run)
+            for other in indexes:
+                if units[other]['source_rid']!=header['source_rid']:
+                    continue
+                text=units[other]['text']
+                if (shape[0]=='fields' and any(re.search(r'(?<!\w)'+re.escape(key)+r'(?!\w)',text,re.I) for key in shape[1])
+                        or shape[0]=='columns' and shape[1] in text
+                        or shape[0]=='measurements' and _MEASUREMENT_SETUP.search(text)
+                        or _CONTEXT_QUALIFIER.search(text.strip())
+                        or re.search(r'\b(?:all|each|every)\s+(?:\w+\s+){0,2}(?:measurements?|observations?|readings?|records?|rows?|samples?|trials?|runs?)\b|(?:所有|每个|每次|每项).{0,8}(?:测量|观测|记录|样本|实验|行)',text,re.I)):
+                    expanded.add(other)
+    # A directly following withdrawal/restriction refers to the selected data
+    # block even when it does not repeat the experiment's topic nouns.
+    for indexes in by_session.values():
+        records=[]
+        for index in indexes:
+            if not records or units[records[-1][0]]['source_rid']!=units[index]['source_rid']:
+                records.append([])
+            records[-1].append(index)
+        active_role=None
+        for record in records:
+            role=units[record[0]]['role']
+            qualifying=[index for index in record if (_DATA_REFERENCE.search(units[index]['text']) and _DATA_VALIDITY.search(units[index]['text']))
+                        or _DATA_RESTRICTION.search(units[index]['text'])
+                        or _DATA_CONDITIONS.search(units[index]['text']) and (_DATA_REFERENCE.search(units[index]['text']) or _MEASUREMENT_SETUP.search(units[index]['text']))]
+            if active_role==role and qualifying:
+                for index in qualifying:
+                    expanded.add(index)
+                    units[index]['context_qualification']=True
+                    following=index+1
+                    while following<len(units) and units[following]['source_rid']==units[index]['source_rid'] and _CONTEXT_QUALIFIER.search(units[following]['text'].strip()):
+                        expanded.add(following)
+                        units[following]['context_qualification']=True
+                        following+=1
+            elif any(index in expanded and (_MEASUREMENT_VALUE.search(units[index]['text']) or _numeric_record_shape(units[index]['text'])) for index in record):
+                active_role=role
+            else:
+                active_role=None
+    return expanded
+
+
+def context_units_for_query(rows, query: str) -> list[dict]:
+    """Pure source selector; input rows must already belong to one user.
+
+    No database access, model calls or budget decisions occur here. Both raw
+    retrieval and compact views can preserve exactly these original spans.
     """
-    if limit <= 0 or budget_chars <= 0:
-        return []
-    if not _has_items(conn):
-        legacy = _legacy_digests(conn, user_id, query, limit)
-        return _bound_legacy(legacy, budget_chars)
-    rows = conn.execute(
-        "SELECT rid,session_id,role,content,created_at,seq FROM items"
-        " WHERE user_id=? AND status='active' ORDER BY seq,rid", (user_id,),
-    ).fetchall()
-    if not rows:
-        return _bound_legacy(_legacy_digests(conn, user_id, query, limit), budget_chars)
+    rows=[dict(row) for row in rows]
+    users={row['user_id'] for row in rows if row.get('user_id') is not None}
+    if len(users)>1:
+        raise ValueError('context selector requires records for a single user')
+    rows.sort(key=lambda row:(row['seq'],row['rid']))
     scope, topics = context_scope(query)
     context_request = scope != "ordinary"
     global_scope = scope == "global"
     units, scores = [], {}
+    non_temporal_topics = topics - _TEMPORAL_TOPIC
+    temporal_metadata_only = bool(_TEMPORAL_QUERY.search(query)) and not non_temporal_topics
     for row in rows:
         for segment, sentence in enumerate(_source_sentences(str(row["content"]))):
             overlap = len(topics & _context_tokens(sentence))
+            if temporal_metadata_only and (_RELATIVE_SOURCE_TIME.search(sentence) or _DATE_LITERAL.search(sentence)):
+                overlap += 1
             unit = dict(row)
             unit.update(source_rid=row["rid"], segment=segment, text=sentence, overlap=overlap)
             units.append(unit)
@@ -1480,21 +1761,48 @@ def get_digests(
         relevant_sessions = {session for session, score in scores.items() if score >= threshold}
         relevant_sessions = _bridge_sessions(units,relevant_sessions)
         if context_request:
-            units = [unit for unit in units if unit["session_id"] in relevant_sessions]
-            # A large source can mix a narrow requested topic with pages of
-            # unrelated material. Prefer exact topical spans and neighboring
-            # clauses over uniformly sampling that entire source. Numerical
-            # observations in a matched empirical session remain complete.
-            if (not _AGGREGATE_QUERY.search(query)
-                    and sum(len(unit["text"]) + 40 for unit in units) > budget_chars):
-                anchors = {index for index, unit in enumerate(units)
-                           if unit["overlap"] >= threshold or scores.get(unit["session_id"],0) < threshold}
-                kept = set(anchors)
-                for index in anchors:
-                    for adjacent in (index - 1, index + 1):
-                        if 0 <= adjacent < len(units) and units[adjacent]["source_rid"] == units[index]["source_rid"]:
-                            kept.add(adjacent)
-                units = [unit for index, unit in enumerate(units) if index in kept]
+            anchors = {index for index,unit in enumerate(units)
+                       if unit["session_id"] in relevant_sessions and unit["overlap"] > 0}
+            # Keep true entity-bridge sentences, rather than every unrelated
+            # turn that shares their session container.
+            named = set().union(*({word.casefold() for word in re.findall(r"\b[A-Z][A-Za-z0-9_-]{2,}\b",units[index]["text"])}
+                                   for index in anchors)) if anchors else set()
+            for index,unit in enumerate(units):
+                if unit["session_id"] not in relevant_sessions or scores.get(unit["session_id"],0) >= threshold:
+                    continue
+                names={word.casefold() for word in re.findall(r"\b[A-Z][A-Za-z0-9_-]{2,}\b",unit["text"])}
+                if len(names & named) >= 2:
+                    anchors.add(index)
+            kept=set(anchors)
+            for index in anchors:
+                for direction in (-1,1):
+                    adjacent=index+direction
+                    while (0 <= adjacent < len(units)
+                           and units[adjacent]["source_rid"] == units[index]["source_rid"]
+                           and _CONTEXT_QUALIFIER.search(units[adjacent]["text"].strip())):
+                        kept.add(adjacent)
+                        adjacent += direction
+            # An explicitly delimited data table belongs to its own source:
+            # preserve header/rows together when any of that table matches.
+            # This does not extend a topic to arbitrary numeric personal turns.
+            source_rows={unit["source_rid"]:[] for unit in units}
+            for index,unit in enumerate(units): source_rows[unit["source_rid"]].append(index)
+            table_row=lambda text: bool(re.search(r"[|\t]|[,;].*[,;]",text))
+            for indexes in source_rows.values():
+                runs,run=[],[]
+                for index in indexes:
+                    if table_row(units[index]["text"]):
+                        run.append(index)
+                    else:
+                        if run: runs.append(run)
+                        run=[]
+                if run: runs.append(run)
+                for tabular in runs:
+                    numerical=sum(len(_NUMERIC_LITERAL.findall(units[index]["text"])) >= 2 for index in tabular)
+                    if len(tabular) >= 3 and numerical >= 2 and any(index in anchors for index in tabular):
+                        kept.update(tabular)
+            kept=_schema_block_closure(units,kept)
+            units = [unit for index,unit in enumerate(units) if index in kept]
         else:
             # An ordinary lookup needs matching evidence rather than a full
             # unrelated history that happens to share one word.
@@ -1506,7 +1814,32 @@ def get_digests(
                     if 0 <= adjacent < len(units) and units[adjacent]["source_rid"] == units[index]["source_rid"]:
                         neighbors.add(adjacent)
             units = [unit for index, unit in enumerate(units) if index in neighbors]
-    return _pack_context(units, limit, budget_chars, "global" if global_scope else "topic-scoped")
+    return units
+
+
+def context_source_rids(rows, query: str) -> set[int]:
+    """IDs selected by the same pure selector used for context source spans."""
+    return {int(unit['source_rid']) for unit in context_units_for_query(rows,query)}
+
+
+def get_digests(
+    conn: sqlite3.Connection, user_id: str, query: str, limit: int = 2,
+    *, budget_chars: int = 48000,
+) -> list[str]:
+    """Build bounded, query-scoped evidence from current original records."""
+    if limit<=0 or budget_chars<=0:
+        return []
+    if not _has_items(conn):
+        return _bound_legacy(_legacy_digests(conn,user_id,query,limit),budget_chars)
+    rows=conn.execute(
+        "SELECT rid,session_id,role,content,created_at,seq,"+_timestamp_column(conn)+" FROM items"
+        " WHERE user_id=? AND status='active' ORDER BY seq,rid",(user_id,),
+    ).fetchall()
+    if not rows:
+        return _bound_legacy(_legacy_digests(conn,user_id,query,limit),budget_chars)
+    scope,_=context_scope(query)
+    units=context_units_for_query(rows,query)
+    return _pack_context(units,limit,budget_chars,"global" if scope=='global' else 'topic-scoped')
 
 
 def _bound_legacy(contents: list[str], budget_chars: int) -> list[str]:

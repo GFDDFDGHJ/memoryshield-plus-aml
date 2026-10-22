@@ -37,7 +37,7 @@ AUDIT_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requests.j
 def _audit(record: dict) -> None:
     try:
         with open(AUDIT_LOG, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            fh.write(json.dumps({**record, "system_version": CONFIG.version}, ensure_ascii=False) + "\n")
         if os.path.getsize(AUDIT_LOG) > 8 * 1024 * 1024:
             with open(AUDIT_LOG, encoding="utf-8") as fh:
                 tail = fh.readlines()[-5000:]
