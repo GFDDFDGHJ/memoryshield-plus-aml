@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import evidence_links as link_layer
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -1555,12 +1556,17 @@ def _context_metadata(units: list[dict]):
     anchored = any(_RELATIVE_SOURCE_TIME.search(unit["text"]) for unit in units)
     if anchored:
         columns.append("relative_time_anchor")
+    fragments = any('source_char_start' in unit for unit in units)
+    if fragments:
+        columns.append("source_char_range")
     header = "[SOURCE " + " ".join(shared) + "; source_rid@seq/segment identifies original records]"
     if variable_time:
         header += "\nEach recorded_at = base_epoch + recorded_at_offset_s seconds (UTC)."
     if len(origins) > 1:
         header += "\nOrigin codes: M=message.timestamp, I=ingestion-clock, U=legacy-unknown."
     header += "\nOnly message.timestamp may anchor relative expressions; ingestion-clock and legacy-unknown are metadata, not inferred event dates."
+    if fragments:
+        header += "\nsource_char_range is a half-open character range in the original normalized source segment; fragments with the same source pointer form one segment, not extra observations."
     def metadata(unit):
         values=[]
         if len(sessions) > 1:
@@ -1576,6 +1582,8 @@ def _context_metadata(units: list[dict]):
             values.append({"message.timestamp":"M","ingestion-clock":"I","legacy-unknown":"U"}.get(origin,origin))
         if anchored:
             values.append(_recorded_time(stamp(unit)) if origin == "message.timestamp" and _RELATIVE_SOURCE_TIME.search(unit["text"]) else "none")
+        if fragments:
+            values.append(str(unit.get('source_char_start', 0))+':'+str(unit.get('source_char_end', len(unit['text']))))
         return values
     return header,columns,metadata
 
@@ -1631,11 +1639,48 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
     return pieces
 
 
-def _pack_context(units: list[dict], limit: int, budget_chars: int, scope: str) -> list[str]:
+def _pack_context(
+    units: list[dict], limit: int, budget_chars: int, scope: str,
+    *, selection_plan: dict | None = None,
+) -> list[str]:
     total = len(units)
     budget_chars = max(0, int(budget_chars))
+    if selection_plan is not None:
+        selection_plan.clear()
+        selection_plan.update(complete_indices=set(), partial_char_ends={}, total=total)
+
+    def selected(output, indices=(), partial=None):
+        if selection_plan is not None:
+            selection_plan['complete_indices'] = set(indices)
+            selection_plan['partial_char_ends'] = dict(partial or {})
+        return output
+
+    def source_excerpt(index, prefix, label, allowance):
+        if allowance <= 0:
+            return selected([])
+        text = units[index]['text']
+        quote = _evidence_quote(text, allowance)
+        if 'source_char_start' in units[index]:
+            marker = " [source excerpt; remainder omitted]"
+            visible = quote[:-len(marker)] if quote.endswith(marker) else quote
+            start = units[index]['source_char_start']
+            range_label = f"source_char_range={start}:{start+len(visible)} (same original source segment)\n"
+            # The extra fragment envelope is also charged to this budget.
+            allowance -= len(range_label)
+            if allowance <= 0:
+                return selected([])
+            quote = _evidence_quote(text, allowance)
+            visible = quote[:-len(marker)] if quote.endswith(marker) else quote
+            range_label = f"source_char_range={start}:{start+len(visible)} (same original source segment)\n"
+            label += range_label
+        if quote == text:
+            return selected([prefix + label + quote], [index])
+        marker = " [source excerpt; remainder omitted]"
+        visible = quote[:-len(marker)] if quote.endswith(marker) else quote
+        return selected([prefix + label + quote], partial={index: len(visible)})
+
     if not total or limit <= 0 or budget_chars < 300:
-        return []
+        return selected([])
     header = (f"[DIGEST] {scope} source evidence; included={{included}}/{total} source segments; "
               "coverage={coverage}. Source sequence is provenance, not inferred event chronology. "
               "Timestamp origins below determine whether relative-time anchoring is available.\n")
@@ -1673,7 +1718,7 @@ def _pack_context(units: list[dict], limit: int, budget_chars: int, scope: str) 
 
     full = render(range(total))
     if sum(map(len, full)) <= budget_chars:
-        return full
+        return selected(full, range(total))
 
     required = {index for index, unit in enumerate(units)
                 if unit.get('context_qualification') or unit.get('context_schema') or unit.get('context_dependency')}
@@ -1687,7 +1732,7 @@ def _pack_context(units: list[dict], limit: int, budget_chars: int, scope: str) 
         prefix = header.format(included=0, coverage="truncated within one source; not complete statistics")
         label = _source_label(chosen) + "\n"
         allowance = budget_chars - len(prefix) - len(label) - 50
-        return [prefix + label + _evidence_quote(chosen['text'], allowance)] if allowance > 0 else []
+        return source_excerpt(first, prefix, label, allowance)
 
     # Cover sources before spending the remaining budget on another sentence
     # from a source already represented. Interleave sessions and spread the
@@ -1772,15 +1817,16 @@ def _pack_context(units: list[dict], limit: int, budget_chars: int, scope: str) 
         if view and sum(map(len, view)) <= budget_chars:
             best, best_view = trial, view
     if best_view:
-        return best_view
+        return selected(best_view, best)
 
     # One long indivisible source can still exceed the complete context. The
     # excerpt is explicitly incomplete and cannot be mistaken for statistics.
-    chosen = units[priority[0] if priority else 0]
+    index = priority[0] if priority else 0
+    chosen = units[index]
     prefix = header.format(included=0, coverage="truncated within one source; not complete statistics")
     label = _source_label(chosen) + "\n"
     allowance = budget_chars - len(prefix) - len(label) - 50
-    return [prefix + label + _evidence_quote(chosen['text'], allowance)] if allowance > 0 else []
+    return source_excerpt(index, prefix, label, allowance)
 
 
 _NUMERIC_CELL = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?\s*(?:[%A-Za-zµμ°][A-Za-z0-9µμ°%/^²³-]{0,15})?")
@@ -1946,6 +1992,9 @@ def context_units_for_query(rows, query: str) -> list[dict]:
     users={row['user_id'] for row in rows if row.get('user_id') is not None}
     if len(users)>1:
         raise ValueError('context selector requires records for a single user')
+    conflicts = link_layer.conflicting_source_ids(rows,query)
+    if conflicts:
+        rows = [row for row in rows if row['rid'] not in conflicts]
     rows.sort(key=lambda row:(row['seq'],row['rid']))
     scope, topics, _ = source_context_scope(rows, query)
     context_request = scope != "ordinary"
@@ -2053,6 +2102,79 @@ def get_digests(
     scope,_,_=source_context_scope(rows,query)
     units=context_units_for_query(rows,query)
     return _pack_context(units,limit,budget_chars,"global" if scope=='global' else 'topic-scoped')
+
+
+def get_context_views(
+    conn: sqlite3.Connection, user_id: str, query: str, limit: int = 2,
+    *, budget_chars: int = 12000, continuation_budget_chars: int = 64000,
+    continuation_limit: int = 8,
+) -> tuple[list[str], list[str]]:
+    """Return an unchanged bounded prefix and disjoint source continuations.
+
+    The continuation belongs after the existing retrieval prefix. Its source
+    scope is identical to ``get_digests``: requesting more capacity never opens
+    an unrelated topic, speaker or user. Complete source segments are emitted
+    once across these views; a prefix excerpt resumes at its original segment
+    character boundary with the same source pointer, rather than becoming a
+    second observation. Schema, qualifiers and protocols remain in the prefix
+    or continuation with their original provenance.
+
+    This source view does not replace dedicated rule applicability or identity
+    retrieval. Ordinary, numeric, synthesis and transfer queries all retain
+    their existing source selection rules; an unknown specific topic remains
+    unmatched even with a large continuation budget.
+    """
+    if limit <= 0 or budget_chars <= 0:
+        return [], []
+    if not _has_items(conn):
+        return _bound_legacy(_legacy_digests(conn, user_id, query, limit), budget_chars), []
+    rows = conn.execute(
+        "SELECT rid,session_id,role,content,created_at,seq,"+_timestamp_column(conn)+" FROM items"
+        " WHERE user_id=? AND status='active' ORDER BY seq,rid", (user_id,),
+    ).fetchall()
+    if not rows:
+        return _bound_legacy(_legacy_digests(conn, user_id, query, limit), budget_chars), []
+    scope, _, _ = source_context_scope(rows, query)
+    label = "global" if scope == 'global' else 'topic-scoped'
+    units = context_units_for_query(rows, query)
+    prefix_plan = {}
+    prefix = _pack_context(units, limit, budget_chars, label, selection_plan=prefix_plan)
+    if continuation_budget_chars <= 0 or continuation_limit <= 0:
+        return prefix, []
+    complete = prefix_plan.get('complete_indices', set())
+    partials = prefix_plan.get('partial_char_ends', {})
+    remaining, original_indexes = [], []
+    for index, unit in enumerate(units):
+        if index in complete:
+            continue
+        continued = dict(unit)
+        if index in partials:
+            start = partials[index]
+            continued.update(source_char_start=start, source_char_end=len(unit['text']),
+                             text=unit['text'][start:])
+        remaining.append(continued)
+        original_indexes.append(index)
+    if not remaining:
+        return prefix, []
+    # Reserve a fixed small envelope for exact union-coverage disclosure. The
+    # legacy prefix renderer and its character budget remain byte-identical.
+    continuation_plan = {}
+    pieces = _pack_context(remaining, continuation_limit,
+                           max(0, int(continuation_budget_chars)-900), label,
+                           selection_plan=continuation_plan)
+    if not pieces:
+        return prefix, []
+    newly_complete = {original_indexes[index] for index in continuation_plan.get('complete_indices', set())}
+    combined = complete | newly_complete
+    coverage = ('complete for selected source scope' if len(combined) == len(units)
+                else 'truncated; do not treat as complete statistics')
+    header = (f"[CONTEXT CONTINUATION] {label}; complete source segments in prefix={len(complete)}; "
+              f"newly completed segments={len(newly_complete)}; combined coverage={len(combined)}/{len(units)}; "
+              f"coverage={coverage}. Append to the existing prefix. "
+              "A source_rid@seq/segment identifies one original segment, including any disjoint character fragments; "
+              "it is not an additional observation. Source schema, qualifications and execution protocols may be in the prefix.\n")
+    pieces[0] = header + pieces[0]
+    return prefix, pieces
 
 
 def _bound_legacy(contents: list[str], budget_chars: int) -> list[str]:

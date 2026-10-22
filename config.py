@@ -60,6 +60,10 @@ class Config:
     # Only explicit current-state queries use a recency tie-break, capped at
     # a 0.01 cosine gap. Ordinary and historical queries have no age boost.
     recency_weight: float = float(os.environ.get("AML_RECENCY_WEIGHT", "0.10"))
+    # Preserve the compact front of Search, then use a bounded continuation for
+    # large selected histories. These are character ceilings, not token counts.
+    extended_context_chars: int = int(os.environ.get("AML_EXTENDED_CONTEXT_CHARS", "160000"))
+    context_continuation_chars: int = int(os.environ.get("AML_CONTEXT_CONTINUATION_CHARS", "128000"))
 
     # --- Governance (MemoryShield+) ---
     # OFF by default as of 2026-10-21. Measured against the real AML DB, the
@@ -83,7 +87,7 @@ class Config:
     # --- Server ---
     host: str = os.environ.get("AML_HOST", "0.0.0.0")
     port: int = int(os.environ.get("AML_PORT", "8080"))
-    version: str = os.environ.get("AML_VERSION", "2026.10.22-rc5")
+    version: str = os.environ.get("AML_VERSION", "2026.10.22-rc6")
 
 
 CONFIG = Config()

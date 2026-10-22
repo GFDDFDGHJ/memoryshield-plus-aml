@@ -15,6 +15,8 @@ FILES = (
     "test_temporal_context.py", "test_scope_consistency.py", "evaluate_capabilities.py",
     "test_schema_context_blocks.py",
     "test_capability_generalization.py", "test_context_planning.py",
+    "evidence_links.py", "test_evidence_links.py", "test_context_continuation.py",
+    "test_search_continuation.py", "evaluate_extended_context.py",
     "prepare_capability_vectors.py", "EVALUATION.md",
     "watcher.ps1", "run-watcher.cmd",
     "prepare_submission.py",
@@ -25,7 +27,7 @@ ROOT = Path(__file__).resolve().parent
 def main():
     payloads = {name: (ROOT / name).read_bytes() for name in FILES}
     manifest = {
-        "version": "2026.10.22-rc5",
+        "version": "2026.10.22-rc6",
         "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
         "base_commit": "aed97db67b7dbd6d4d35678b4c0c609cf2050014",
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in payloads.items()},

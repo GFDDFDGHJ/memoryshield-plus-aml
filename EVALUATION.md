@@ -172,3 +172,78 @@ Frozen rc5 algorithm source SHA256:
 store.py  49b02a229545c25822354ef3c47359ec0ed45bf53c9dbbdb073b94f510a885c6
 facts.py  6eb00bbfe4b3621eab05528aaaa7094bb728a41c100fb6b49da47e3d5dfcb34f
 ```
+
+## rc6 extended evidence and explicit references
+
+The compact front of retrieval remains bounded as before. Large selected
+histories can now append source segments omitted from that view, with a total
+160,000-character ceiling and 128,000 characters available for continuations.
+Small selected scopes remain within 32,000 characters. These are content
+character bounds, not a promise about tokens or the Answer model's visible
+window. The platform applies its own token-counted prefix; its documented input
+budget is 117,760 tokens ([AML guide](https://agentmemories.ai/docs)).
+
+Continuations reuse the original user and topic scope. The selection plan
+tracks original source RID/segment identities and partial character ranges;
+reversible numeric templates remain literal. Complete source segments already
+in the compact view are not re-added as new observations. A raw copy and a
+source view may quote the same record; consumers must count its RID once.
+
+The new `evidence_links.py` follows explicit dataset/project/protocol references
+from the query and a retrieved source. It supplies bounded source excerpts of
+older definitions, units, conditions and revocations. The source speaker is
+retained. It does not infer a version override, follow arbitrary multi-hop
+entities, or connect unlabelled people. Different explicitly headed same-kind
+IDs can be excluded consistently from raw and aggregated views; negative
+references, unknown sources and relationship bridges stay eligible.
+
+All 333 local checks pass: the protected 275 plus 15 continuation, 38 literal
+identifier-link, and five Search integration controls. The old 47-scenario
+real-vector evaluation has identical per-scenario evidence, fidelity,
+contamination and rank outcomes on both existing seeds, including its six
+previous strict failures. Existing fixtures were not changed.
+
+`evaluate_extended_context.py` adds eight independently invented long-history,
+numeric, explicit-reference and streaming scenarios. The same fixed inputs and
+shared real `text-embedding-v4` cache give the following full-return evidence:
+
+| Diagnostic | rc5 | rc6 |
+|---|---:|---:|
+| Cross-topic decision/rationale markers | 92 / 384 | 384 / 384 |
+| Narrow project-history markers | 96 / 288 | 288 / 288 |
+| Independently recorded observations | 194 / 713 | 713 / 713 |
+| Cross-session dataset observations | 140 / 317 | 317 / 317 |
+| Online/batch dataset observations | 123 / 173 | 173 / 173 |
+
+The numeric decoder reads visible declared template columns, deduplicates by
+original RID and checks count, mean and population variance against the
+invented observations. Repeated equal-valued records remain separate RIDs.
+All eight full-return evidence contracts pass in rc6, versus two in rc5.
+This is neither an eight-question answer score nor a projection of Smoke/Full.
+One contract also checks a newly stated analysis reference, which is diagnostic
+coverage rather than a necessary numerical input. Prefix metrics are reported
+separately and do not imply that 8k or 16k characters is the platform's limit.
+
+A single in-process cached-vector stress round of 16 simultaneous long searches
+had zero search, isolation or sentinel errors, retained 317/317 observations
+each, and completed in 11.45 seconds (maximum request 11.44 seconds). It excludes
+HTTP, embedding-provider and public-network latency, and does not establish
+sustained throughput or an end-to-end service guarantee.
+
+Limits remain: implicit aliases and reference-card types are not linked;
+abstract topic requests can still lack anchors; very large histories may remain
+truncated. Full-response coverage does not establish final-answer reasoning,
+complete privacy protection or suitability for every downstream context limit.
+The embedding model, Add transaction, database schema, endpoint and credentials
+are unchanged. No generative LLM or unapproved model is introduced.
+
+Frozen rc6 algorithm source SHA256:
+
+```text
+store.py           bf3a76d429bc557dc4afd6360b4c901d2de9f012995b255dbbdb78cd4ee4a341
+facts.py           3c748676ce6a4be48bba913b5fb177b48e05613fd320bce8171c812f96cfa42f
+evidence_links.py  b2e6960d0ae54d276b538497b73b8b099783eab92eae07b05148b52af45c7df0
+```
+
+Extended fixture SHA256: `0c3cb5da7305d1cb03e24a3d012bbf6cbd10590f6a49bbf206fad25ac6d8dce1`.
+Shared extended vector cache SHA256: `8e28e6d6f663a628ba5f454a55770ebbd33af248c52f5027649a877a7ecc828e`.

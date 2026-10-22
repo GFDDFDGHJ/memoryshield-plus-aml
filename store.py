@@ -36,6 +36,7 @@ import sqlite_vec
 from openai import OpenAI
 
 import facts as fact_layer
+import evidence_links as link_layer
 from config import CONFIG
 
 try:  # NumPy accelerates exact per-user scoring but is optional.
@@ -110,6 +111,10 @@ _RULE_QUERY_WORDS = frozenset(
 _CORRECTION_CUE = re.compile(
     r"^\s*(?:correction\b|actually\b|no\s*[,，:]|to\s+correct\b)"
     r"|^\s*(?:更正|纠正|修正|不对|实际上)", re.I,
+)
+_LINK_REFERENCE = re.compile(
+    r"\b(?:data[ _-]?sets?|projects?|protocols?)\b|数据集|项目|协议|规程"
+    r"|[A-Za-z][A-Za-z0-9_.]*[-:/][A-Za-z0-9_.:/-]+", re.I,
 )
 
 
@@ -601,6 +606,13 @@ class MemoryStore:
         candidates: list[dict] = []
         reserve = min(8, max(1, (top_k + 1) // 2))
         structured_limit = top_k - reserve
+        link_rows, conflicting_sources = [], set()
+        if top_k > 1 and _LINK_REFERENCE.search(query) and not _single_personal_attribute(query):
+            link_rows = [dict(row) for row in conn.execute(
+                "SELECT rid,user_id,session_id,role,content,created_at,timestamp_origin,status,seq"
+                " FROM items WHERE user_id=? AND status='active' ORDER BY seq,rid", (user_id,),
+            )]
+            conflicting_sources = link_layer.conflicting_source_ids(link_rows, query)
 
         # Query-related rules are individual evidence blocks. In particular, a
         # conditional rule keeps its trigger and is not limited to the five
@@ -609,6 +621,7 @@ class MemoryStore:
         # a fixed count that silently drops the thirteenth constraint.
         rule_limit = max(1, structured_limit)
         rules = fact_layer.relevant_rules(conn, user_id, query, rule_limit)
+        rules = [evidence for evidence in rules if evidence.get("source_rid") not in conflicting_sources]
         if top_k == 1:
             rules = [evidence for evidence in rules if _single_slot_rule(query, evidence)][:1]
         if top_k == 1 and rules:
@@ -639,17 +652,28 @@ class MemoryStore:
         # evidence matches the topic. The fact layer excludes metadata from
         # this relevance test and has no unrelated largest-session fallback.
         wants_summary = _summary_query(query)
-        raw_count = conn.execute(
-            "SELECT count(*) FROM items WHERE user_id=? AND status='active'", (user_id,),
-        ).fetchone()[0]
+        source_size = conn.execute(
+            "SELECT count(*),COALESCE(sum(length(content)),0) FROM items"
+            " WHERE user_id=? AND status='active'", (user_id,),
+        ).fetchone()
+        raw_count, raw_chars = source_size[0], source_size[1]
         # A short history already fits verbatim: an extractive copy would only
         # displace the exact record and repeat its neighboring turns.
         digest_cap = 6 if wants_summary else (2 if raw_count > top_k else 0)
         digest_limit = min(digest_cap, max(0, structured_limit - len(candidates)))
         digest_budget = 12000 if wants_summary else 2000
-        digest_views = fact_layer.get_digests(
-            conn, user_id, query, digest_limit, budget_chars=digest_budget,
-        )
+        continuation_views = []
+        if (wants_summary and top_k >= 8 and digest_limit
+                and (raw_chars > 24000 or raw_count > top_k)):
+            digest_views, continuation_views = fact_layer.get_context_views(
+                conn, user_id, query, digest_limit, budget_chars=digest_budget,
+                continuation_budget_chars=max(0,min(128000,CONFIG.context_continuation_chars)),
+                continuation_limit=min(8,max(1,top_k//4)),
+            )
+        else:
+            digest_views = fact_layer.get_digests(
+                conn, user_id, query, digest_limit, budget_chars=digest_budget,
+            )
         for text in digest_views:
             # The fact layer budgets the complete list, including compact
             # source tables whose continuation rows share an earlier label.
@@ -683,6 +707,8 @@ class MemoryStore:
         for evidence in candidates:
             if len(structured) >= structured_limit:
                 break
+            if evidence.get("source_rid") in conflicting_sources:
+                continue
             key = _norm_text(evidence["content"])
             if key in seen_contents or len(evidence["content"]) > structured_budget:
                 continue
@@ -694,6 +720,20 @@ class MemoryStore:
             conn, user_id, qvec, top_k,
             1.0 if _current_query(query) else 0.0, query,
         )
+        linked = []
+        if link_rows and raw:
+            seeds = {row["source_rid"] for row in raw[:4] if row.get("source_rid") is not None}
+            related = link_layer.select_linked_sources(
+                link_rows, query, seeds, max_sources=min(8,top_k-1), max_chars=10000)
+            for row in related:
+                quote = row["quote"]
+                label = fact_layer._source_label(row)
+                evidence = self._structured_evidence("linked", user_id,
+                    {**row,"text":label+"\n"+quote}, 1.65)
+                evidence.update(evidence_links=row["evidence_links"],
+                                source_char_ranges=row["quote_spans"], excerpt=True,
+                                source_chars=len(row["content"]))
+                linked.append(evidence)
         scoped_attribute = next((row.get("requested_attribute") for row in raw
                                  if row.get("requested_attribute")), None)
         if scoped_attribute:
@@ -756,7 +796,10 @@ class MemoryStore:
                     evidence["id"] = _structured_id(evidence["id"].split("_",1)[0], user_id, evidence["content"])
             leading.insert(0, correction)
         head_count = min(reserve, max(0, top_k - len(leading)))
-        out = leading + raw[:head_count] + supplementary + raw[head_count:]
+        # Explicitly linked definitions and restrictions follow the first
+        # matching observation, ahead of repetitive semantic-neighbor tails.
+        out = (leading + raw[:min(1,head_count)] + linked
+               + raw[min(1,head_count):head_count] + supplementary + raw[head_count:])
         packed: list[dict] = []
         seen_evidence: set[int] = set()
         remaining_chars = 32000
@@ -776,6 +819,35 @@ class MemoryStore:
             packed.append(evidence)
             seen_evidence.add(identity)
             remaining_chars -= len(evidence["content"])
+        if continuation_views:
+            # Keep the original first 16k readable characters intact. Omitted
+            # selected source segments take precedence over repetitive raw
+            # tails, and result-count limits still apply to the complete array.
+            protected, used = 0, 0
+            while protected < len(packed) and used < 16000:
+                used += len(packed[protected]["content"])
+                protected += 1
+            total_context = sum(map(len,digest_views+continuation_views))
+            ceiling = 32000 if total_context <= 32000 else max(32000,min(160000,CONFIG.extended_context_chars))
+            expanded = packed[:protected]
+            seen = {_norm_text(row["content"]) for row in expanded}
+            for text in continuation_views:
+                if len(expanded) >= top_k or len(text)+used > ceiling:
+                    continue
+                key = _norm_text(text)
+                if key in seen:
+                    continue
+                expanded.append({"id":_structured_id("continuation",user_id,text),
+                                 "content":text,"score":1.6,"created_at":now_iso})
+                seen.add(key)
+                used += len(text)
+            for row in packed[protected:]:
+                if len(expanded) >= top_k:
+                    break
+                if len(row["content"])+used <= ceiling:
+                    expanded.append(row)
+                    used += len(row["content"])
+            packed = expanded
         return packed
 
     @staticmethod
@@ -837,7 +909,9 @@ class MemoryStore:
                 dot = sum(v * q for v, q in zip(vec, qvec))
                 sims.append(dot / (norm * q_norm))
 
-        excluded = exclude_source_rids or set()
+        excluded = set(exclude_source_rids or ())
+        if _LINK_REFERENCE.search(query):
+            excluded.update(link_layer.conflicting_source_ids(rows, query))
         ranked = [(float(sim), row) for row, sim in zip(rows, sims)
                   if row["rid"] not in excluded]
         ranked.sort(key=lambda pair: pair[0], reverse=True)

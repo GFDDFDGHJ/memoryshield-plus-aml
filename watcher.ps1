@@ -18,7 +18,7 @@
 
 $dir = [IO.Path]::GetFullPath($PSScriptRoot)
 Set-Location $dir
-$expectedVersion = '2026.10.22-rc5'
+$expectedVersion = '2026.10.22-rc6'
 $expectedModel = 'text-embedding-v4'
 
 function Update-DashScopeEnvironment {
@@ -247,7 +247,7 @@ assert CONFIG.embedding_api_key and CONFIG.auth_token
 assert CONFIG.embedding_model == 'text-embedding-v4'
 assert CONFIG.embedding_mode == 'standard' and CONFIG.embedding_dim == 1024
 assert CONFIG.embedding_base_url == 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-assert CONFIG.version == '2026.10.22-rc5'
+assert CONFIG.version == '2026.10.22-rc6'
 '@
     & $py -c $check *> $null
     return ($LASTEXITCODE -eq 0)
