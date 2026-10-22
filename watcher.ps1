@@ -246,15 +246,15 @@ function Test-PortOccupied {
 function Test-StartupConfiguration {
     Update-DashScopeEnvironment
     $check = @'
-import fastapi, httpx, openai, sqlite_vec, uvicorn
+import sys, fastapi, httpx, openai, sqlite_vec, uvicorn
 from config import CONFIG
 assert CONFIG.embedding_api_key and CONFIG.auth_token
 assert CONFIG.embedding_model == 'text-embedding-v4'
 assert CONFIG.embedding_mode == 'standard' and CONFIG.embedding_dim == 1024
 assert CONFIG.embedding_base_url == 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-assert CONFIG.version == '2026.10.22-rc6'
+assert CONFIG.version == sys.argv[1]
 '@
-    & $py -c $check *> $null
+    & $py -c $check $expectedVersion *> $null
     return ($LASTEXITCODE -eq 0)
 }
 

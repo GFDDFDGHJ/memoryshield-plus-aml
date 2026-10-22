@@ -43,7 +43,7 @@
     "evaluate_synthesis_intent.py": "bf37719cae057cd8af53fc2668c6bbce397c280ea607e6bc742f739f4d92e099",
     "evaluate_method_dependencies.py": "b387adbdcd5f1bbc7377c0c67b0456db4d6ab2674124eb83ac9d0bc56c80e912",
     "evaluate_rerank_replay.py": "ed2a02b6be80a1a26f463df62fab4072fa6b4d5444904ad0a24b07242db6c651",
-    "watcher.ps1": "d93fb97480dee6b58b5a3c476f611c0b4d732c5eb32f2b7df50181be56f014f4",
+    "watcher.ps1": "b35544ca98383132174360feb9b685b3ebdbf0234e24ffc0cadb4fcd195ed19e",
     "run-watcher.cmd": "38ad6fc1364ef01e475678d5a996389d83454b4b166b993b964471116ac11f36",
     "prepare_submission.py": "bb6732bc7ca6355d8b64fb297f0e53b3d51fcf387daa3cb98ad5305f5ade9e71"
   }
