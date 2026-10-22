@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **2026.10.22-rc2**. Repository:
+Candidate version: **2026.10.22-rc3**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -17,18 +17,33 @@ updated to the same version, then pass the official Smoke before Full.
   OpenAI-compatible API. Batches contain at most ten texts.
 - Deterministic regex extraction creates facts, preferences, and standing rules.
   This candidate makes **no generative LLM calls** during Add or Search.
-- Retrieval combines related rules, ordered state history, session digests,
-  relevant facts, personal background when requested, and exact cosine ranking
-  inside the requesting `user_id`.
+- Retrieval combines applicable rules, ordered state history, query-scoped
+  source context, relevant facts, personal background when requested, and exact
+  cosine ranking inside the requesting `user_id`.
   NumPy is optional; the standard-library fallback scores the same user scope.
-- Fact updates preserve history, prohibitions, and conditional triggers.
-  Raw de-duplication preserves semantic punctuation and repeated observations
-  from different sessions or dates.
-- Extractive digests retain Chinese text, decimals, units, repeated observations,
-  and early/middle/late sources. Summary retrieval covers all stored sessions.
-- Historical retrieval includes neighboring turns in source order. Source
-  timestamps are labeled as recording metadata, not inferred event dates.
-  Current-state assertions carry explicit current/historical labels.
+- Exact lookups prioritize relevant source evidence. A temporal restriction
+  such as "before" does not globally reorder all results by insertion time.
+  Explicit sequence requests include bounded neighboring turns in source order.
+- Each raw result identifies its source row, session, sequence, role, and storage
+  timestamp. De-duplication merges the same source row across retrieval layers;
+  distinct source rows remain distinct even when text and timestamps match.
+- Fact updates preserve history, prohibitions, and conditional triggers. User
+  and assistant assertions update their own role's history. Existing facts with
+  unknown roles are repaired lazily from their original sources for the current
+  user's affected attribute; genuine retractions remain retracted.
+- Summary evidence is assembled from original source messages at query time.
+  Topic requests exclude unrelated sessions while retaining connected evidence;
+  global requests can cover all sessions. Repeated numeric observations are
+  retained with provenance. When needed, a reversible literal template compacts
+  repeated wording without estimating statistics or dropping numeric precision.
+  Coverage and any truncation are explicitly disclosed.
+- Raw messages remain complete in storage. Search uses query-centered excerpts
+  for long messages, retains adjacent conditions/exceptions, and labels partial
+  evidence. Returned `content` has a total 32,000-character budget at complete
+  result boundaries. `top_k` is an upper bound, not a requirement to pad results.
+- Applicable global execution constraints accompany rule requests; topic-specific
+  business rules stay scoped. Source timestamps are recording metadata, not
+  inferred event dates. Current-state assertions carry explicit history labels.
 - Identical `(user_id, request_id)` retries are idempotent across restarts.
   Different content or session with that key returns HTTP 409.
 - The legacy substring-based governance feature is disabled by default.
@@ -89,7 +104,7 @@ override it. See [Alibaba quota documentation](https://help.aliyun.com/zh/model-
 | `EMBEDDING_API_KEY` | Project secret or `DASHSCOPE_API_KEY` |
 | `AML_DB_PATH` | Project-local `aml_text_v4.db` |
 | `AML_AUTH_TOKEN` | `.secrets/aml_auth_token.txt` |
-| `AML_VERSION` | `2026.10.22-rc2` |
+| `AML_VERSION` | `2026.10.22-rc3` |
 | `AML_RECENCY_WEIGHT` | `0.10` |
 | `AML_GOVERNANCE` | `false` |
 | `AML_HOST` / `AML_PORT` | `0.0.0.0` / `8080` |
@@ -144,7 +159,10 @@ python test_store_regressions.py
 python test_api_contract.py
 python test_fact_quality.py
 python test_store_quality.py
+python test_context_facts.py
+python test_prefix_retrieval.py
 python evaluate_quality.py --source-root . --output tmp/quality-candidate.json
+python evaluate_context_quality.py --source-root . --output tmp/context-candidate.json
 ```
 
 Tests cover isolation, retry/conflict/concurrent writes, transaction rollback,
@@ -153,16 +171,24 @@ batching/order/shape, rule semantics, fact history, authentication, and request
 auditing without content. They do not measure leaderboard quality or replace
 the official Smoke.
 
-The fixed independent synthetic evidence evaluation improved from 21/37 checks
-on the pre-optimization snapshot to 37/37 on this candidate. A second comparison
-reusing the same real `text-embedding-v4` vectors improved from 4/7 to 7/7
-synthetic retrieval cases. These results measure evidence coverage, fidelity,
-and ranking; they are not official capability scores and do not predict a new
-Smoke score. Neither comparison uses official evaluation conversations.
+The previous rc2 release scored **61.34** in official Smoke, below the earlier
+65.23 result. In particular, explicit fact recall fell from 100 to 80. This
+release addresses independently reproduced retrieval failures; it has no new
+official score yet.
 
-Previously stored digests use the extraction logic active when their session
-was last written. New platform runs create fresh user scopes and receive the
-new extraction behavior; no evaluation-data backfill is required.
+On a fixed, independently authored synthetic context evaluation, rc2 passed
+15/27 checks and rc3 passed 27/27 (17 scenarios). It requests `top_k=100` and
+checks whether needed evidence appears within the first 8,000 and 16,000
+characters. These are stress-test budgets, not claimed platform limits. A
+separate four-case synthetic comparison with shared real `text-embedding-v4`
+vectors improved from 1/4 to 4/4; the existing seven real-vector controls also
+passed. Cached runs make no provider calls. Neither comparison reads official
+evaluation conversations or answers, and neither predicts a Smoke score.
+
+The eight local test scripts above pass 171 checks. The older evidence evaluator
+v2 passes 37/37; its source-identity check explicitly preserves separate real
+observations while `request_id` handles retries. Source-driven summary context
+does not depend on rebuilding cached session digests.
 
 ## Deployment and submission
 
@@ -174,7 +200,7 @@ tunnel names change after restarts and require updating the AML API binding.
 
 This Windows deployment keeps the existing public origin
 `https://hlq5070.tail50f4d4.ts.net` and the same `/add` and `/search` paths.
-`watcher.ps1` supervises the rc2 API. It pins Beijing `text-embedding-v4`, 1024
+`watcher.ps1` supervises the rc3 API. It pins Beijing `text-embedding-v4`, 1024
 dimensions, and `aml_text_v4.db`; health probes verify version and model. A
 lifetime file lock prevents duplicate supervisors. Launch the watcher outside
 the interactive tool process; the current host uses `Win32_Process.Create`.
@@ -206,7 +232,7 @@ Official [participation guide](https://agentmemories.ai/competition/) and
 Inspected public base commit: `aed97db67b7dbd6d4d35678b4c0c609cf2050014`.
 That base has no license or complete attribution statement. The author must
 select an open-source license and disclose reused papers, repositories, and
-code before publication. The name “MemoryShield+” alone does not establish
+code before the formal submission. The name “MemoryShield+” alone does not establish
 that this implementation reproduces a particular paper.
 
 Relative to that public base, this candidate adds the fact/digest layer and

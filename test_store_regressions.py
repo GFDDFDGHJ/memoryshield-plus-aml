@@ -4,6 +4,8 @@ Run: python test_store_regressions.py
 """
 from __future__ import annotations
 
+import json
+import re
 import tempfile
 import threading
 import unittest
@@ -12,11 +14,34 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from collections import Counter
 
 import store as store_module
 
 
 DIM = 4
+
+
+def raw_literal(row: dict) -> str:
+    """Remove exactly one SOURCE label while validating its provenance.
+
+    The remainder is compared literally by callers: no stripping, token
+    normalization, substring matching, or excerpt reconstruction is allowed.
+    """
+    label, newline, body = row["content"].partition("\n")
+    match = re.fullmatch(
+        r'\[SOURCE source_rid=(\d+) session=(.+) seq=(\d+) role=([^\s;]+) '
+        r'stored_at=([^;]+); stored record timestamp, not event occurrence time\]',
+        label,
+    )
+    assert newline and match, "raw result must have one valid SOURCE label"
+    assert row["source_rid"] == int(match[1])
+    assert row["session_id"] == json.loads(match[2])
+    assert row["seq"] == int(match[3])
+    assert row["role"] == match[4]
+    assert row["stored_at"] == row["created_at"] == match[5]
+    assert row["id"] == f'mem_{row["source_rid"]}'
+    return body
 
 
 class OfflineMemoryStore(store_module.MemoryStore):
@@ -113,7 +138,7 @@ class StoreRetrievalRegressions(_OfflineStoreTestCase):
                 raw_count = sum(r["id"].startswith("mem_") for r in results)
                 self.assertGreaterEqual(raw_count, min(8, (top_k + 1) // 2))
 
-    def test_same_long_prefix_keeps_different_tails_and_collapses_duplicates(self) -> None:
+    def test_same_long_prefix_keeps_different_tails_and_distinct_repeated_sources(self) -> None:
         prefix = "shared conversation introduction " * 20
         first = prefix + "Destination chosen is Kyoto."
         second = prefix + "Destination chosen is Bergen."
@@ -122,8 +147,10 @@ class StoreRetrievalRegressions(_OfflineStoreTestCase):
         with self.memory._connect() as conn:
             results = self.memory._search_raw(conn, "target", [1.0, 0.0, 0.0, 0.0], 10)
 
-        self.assertEqual(len(results), 2)
-        self.assertEqual({r["content"] for r in results}, {first, second})
+        self.assertEqual(len(results), 3)
+        self.assertEqual(Counter(raw_literal(row) for row in results), Counter([first, second, second]))
+        self.assertEqual(len({row["source_rid"] for row in results}), 3)
+        self.assertTrue(all(row["role"] == "user" and row["session_id"] == "session" for row in results))
 
     def test_no_numpy_ranking_is_unchanged_by_other_users(self) -> None:
         relevant = "Target record alpha with the relevant information."
@@ -138,8 +165,8 @@ class StoreRetrievalRegressions(_OfflineStoreTestCase):
             after = self.memory.search("target", "lookup alpha", 2)
 
         self.assertEqual(before, after)
-        self.assertEqual(after[0]["content"], relevant)
-        self.assertEqual({r["content"] for r in after}, {relevant, unrelated})
+        self.assertEqual(raw_literal(after[0]), relevant)
+        self.assertEqual({raw_literal(row) for row in after}, {relevant, unrelated})
 
     def test_no_numpy_uses_cosine_with_nonunit_and_zero_vectors(self) -> None:
         aligned = "Aligned target record."
@@ -155,7 +182,7 @@ class StoreRetrievalRegressions(_OfflineStoreTestCase):
         with patch.object(store_module, "np", None):
             results = self.memory.search("target", "lookup alignment", 3)
 
-        self.assertEqual([r["content"] for r in results], [aligned, diagonal, zero])
+        self.assertEqual([raw_literal(row) for row in results], [aligned, diagonal, zero])
         self.assertAlmostEqual(results[0]["score"], 0.9, places=5)
 
 
@@ -202,6 +229,9 @@ class AddIdempotencyRegressions(_OfflineStoreTestCase):
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM items").fetchone()[0], 1)
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM vec_items").fetchone()[0], 1)
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM add_requests").fetchone()[0], 1)
+                retrieved = reopened._search_raw(conn, "target", [1., 0., 0., 0.], 100)
+            self.assertEqual(len(retrieved), 1)
+            self.assertEqual(raw_literal(retrieved[0]), "My name is Ada.")
         finally:
             reopened.close()
 

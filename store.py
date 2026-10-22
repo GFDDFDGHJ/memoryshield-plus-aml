@@ -5,10 +5,10 @@ Layout:
   vec_items  sqlite-vec index over message embeddings
   facts      (subject, predicate, value) triples mined at write time
 
-Retrieval combines query-related rules, state history, personal background,
-session digests, matching facts, and exact cosine within the requesting user.
-Historical queries retain source order and local event context; current-state
-queries may prefer newer records only among semantic near-ties.
+Retrieval combines attributed raw records with related rules, state history,
+personal background and bounded session views within the requesting user.
+Explicit event-sequence queries retain local source order around relevant
+events; current-state queries may prefer newer records among semantic near-ties.
 
 Raw search is *per user and exact*: with a few hundred messages per user a
 numpy dot product is milliseconds, and it removes two failure modes of the old
@@ -74,6 +74,14 @@ _CURRENT_QUERY = re.compile(
     re.I,
 )
 _INITIAL_QUERY = re.compile(r"\b(?:first|earliest|original|initial)\b|最初|最早|原来", re.I)
+_SEQUENCE_QUERY = re.compile(
+    r"\b(?:chronological|chronology|timeline|sequence)\b"
+    r"|\bin\s+(?:what|which)\s+order\b"
+    r"|\border\s+of\s+(?:events|stages|steps|operations|occurrences|changes)\b"
+    r"|\b(?:what|which)\s+(?:happened|occurred|came)\s+first\b"
+    r"|\bwhat\s+happened\s+before\s+and\s+after\b"
+    r"|时间线|先后|顺序|阶段排序|变化过程", re.I,
+)
 _PERSONAL_QUERY = re.compile(r"\b(?:my|me|i|user|their|his|her)\b|我|用户|个人", re.I)
 _PROFILE_QUERY = re.compile(
     r"\b(?:background|profile|personal|personalized|personality|advice|recommend\w*|care)\b"
@@ -97,6 +105,11 @@ _RULE_QUERY_WORDS = frozenset(
     "create compose generate format reply respond answer summarize summarise prepare "
     "produce list translate rewrite explain please".split()
 )
+_CORRECTION_CUE = re.compile(
+    r"^\s*(?:correction\b|actually\b|no\s*[,，:]|to\s+correct\b)"
+    r"|^\s*(?:更正|纠正|修正|不对|实际上)", re.I,
+)
+_FACT_LOOKUP = re.compile(r"^\s*(?:what|which|who|where|when)\b|^\s*(?:谁|哪个|哪位|哪里|何时|什么)", re.I)
 
 
 def _evidence_body(text: str) -> str:
@@ -109,6 +122,8 @@ def _single_slot_rule(query: str, evidence: dict) -> bool:
     """Only a strongly related instruction may replace a one-slot raw lookup."""
     if not (_RULE_REQUEST.search(query) or _EXECUTION_REQUEST.search(query)):
         return False
+    if evidence.get("scope") == "global" and _EXECUTION_REQUEST.search(query):
+        return True
     topics = fact_layer._tokens(query) - _RULE_QUERY_WORDS
     if not topics:
         return bool(_RULE_REQUEST.search(query))
@@ -122,6 +137,11 @@ def _summary_query(query: str) -> bool:
 
 def _chronology_query(query: str) -> bool:
     return bool(_CHRONOLOGY_QUERY.search(query))
+
+
+def _sequence_query(query: str) -> bool:
+    """A temporal restriction does not by itself request ordered event context."""
+    return bool(_SEQUENCE_QUERY.search(query))
 
 
 def _current_query(query: str) -> bool:
@@ -162,6 +182,78 @@ def _excerpt(text: str, query: str, head: int = 320, window: int = 520) -> str:
     at = text.find(best)
     chunk = text[at:at + window] if at >= 0 else best[:window]
     return opening + " … " + chunk.strip()
+
+
+def _query_preview(text: str, query: str, budget: int = 3000) -> str:
+    """Show complementary literal windows; keep the original turn in storage.
+
+    Greedy token coverage prevents one repeated topic sentence from using all
+    of the preview while another requested attribute is far away in the turn.
+    Windows are labelled excerpts, not standalone synthesized assertions.
+    """
+    if len(text) <= budget:
+        return text
+    tokens = fact_layer._tokens(query)
+    spans = []
+    units = fact_layer._source_sentences(text)
+    locations = []
+    start = 0
+    for unit, part in enumerate(units):
+        at = text.find(part, start)
+        if at < 0:
+            at = start
+        start = at + len(part)
+        locations.append(at)
+        # Very long paragraphs still expose a query match far from the head.
+        offsets = range(0, max(1, len(part)), 600) if len(part) > 1500 else [0]
+        for offset in offsets:
+            piece = part[offset:offset + 900] if len(part) > 1500 else part
+            spans.append((at + offset, piece, tokens & fact_layer._tokens(piece), unit))
+    if not spans:
+        return _excerpt(text, query)
+    selected, covered = [], set()
+    remaining = budget
+    blocked_chain = False
+    # An adjacent exception can reverse a matched sentence without repeating
+    # its nouns. Reserve it with that sentence before choosing extra matches.
+    context_cue = re.compile(
+        r"^(?:except|unless|however|but|only|provided|if|when|otherwise|do\s+not|never)\b"
+        r"|^(?:除非|但是|不过|否则|例外|仅|只有|不要|禁止)", re.I)
+    while spans and remaining >= 150:
+        best = max(range(len(spans)), key=lambda i: (
+            len(spans[i][2] - covered), len(spans[i][2]), -spans[i][0]))
+        at, piece, overlap, unit = spans.pop(best)
+        if not overlap:
+            break
+        if any(at < previous[0] + len(previous[1]) and previous[0] < at + len(piece)
+               for previous in selected):
+            continue
+        context = []
+        following = unit + 1
+        while following < len(units) and context_cue.search(units[following].strip()):
+            if not any(previous[2] == following for previous in selected):
+                context.append((locations[following], units[following], following))
+            following += 1
+        needed = len(piece) + 35 + sum(len(line) + 35 for _, line, _ in context)
+        if needed > remaining:
+            blocked_chain = blocked_chain or bool(context)
+            continue
+        selected.append((at, piece, unit))
+        selected.extend(context)
+        covered |= overlap
+        remaining -= needed
+        if len(selected) >= 8:
+            break
+    if not selected:
+        if blocked_chain:
+            return ("[INCOMPLETE EVIDENCE: a related condition/exception chain exceeds the "
+                    "excerpt budget and is omitted in full. Do not infer an unconditional "
+                    "rule; consult the complete source_rid before applying it.]")
+        return _excerpt(text, query)
+    selected.sort()
+    notice = ("[INCOMPLETE EVIDENCE: an additional related condition/exception chain "
+              "is omitted in full; consult the complete source_rid.]\n") if blocked_chain else ""
+    return notice + "\n[… source text omitted …]\n".join(piece for _, piece, _ in selected)
 
 
 class _DatabaseConnection(sqlite3.Connection):
@@ -396,14 +488,14 @@ class MemoryStore:
             return []
         now_iso = _iso(time.time())
         candidates: list[dict] = []
-        covered_sources: set[int] = set()
         reserve = min(8, max(1, (top_k + 1) // 2))
         structured_limit = top_k - reserve
 
         # Query-related rules are individual evidence blocks. In particular, a
         # conditional rule keeps its trigger and is not limited to the five
         # rules displayed by the compact background profile.
-        rule_limit = 4 if top_k == 1 else min(4, max(1, structured_limit))
+        rule_cap = 12 if _EXECUTION_REQUEST.search(query) else 4
+        rule_limit = rule_cap if top_k == 1 else min(rule_cap, max(1, structured_limit))
         rules = fact_layer.relevant_rules(conn, user_id, query, rule_limit)
         if top_k == 1:
             rules = [evidence for evidence in rules if _single_slot_rule(query, evidence)][:1]
@@ -442,7 +534,16 @@ class MemoryStore:
         # displace the exact record and repeat its neighboring turns.
         digest_cap = 6 if wants_summary else (2 if raw_count > top_k else 0)
         digest_limit = min(digest_cap, max(0, structured_limit - len(candidates)))
-        for text in fact_layer.get_digests(conn, user_id, query, digest_limit):
+        digest_budget = 12000 if wants_summary else 2000
+        digest_views = fact_layer.get_digests(
+            conn, user_id, query, digest_limit, budget_chars=digest_budget,
+        )
+        for text in digest_views:
+            # The fact layer budgets the complete list, including compact
+            # source tables whose continuation rows share an earlier label.
+            # Preserve that representation intact instead of re-sampling it.
+            if not text or len(text) > digest_budget:
+                continue
             candidates.append({"id": _structured_id("digest", user_id, text),
                                "content": text, "score": 1.8,
                                "created_at": now_iso})
@@ -457,36 +558,98 @@ class MemoryStore:
                 continue  # Dedicated rule retrieval applies relevance and scope.
             candidates.append(self._structured_evidence("fact", user_id, evidence, 1.7))
 
-        # Reserve raw evidence without discarding every derived result at small
-        # top_k. A single-slot query can still return a complete governing rule.
-        out: list[dict] = []
+        # A result-count limit is not a downstream context budget. Bound the
+        # supplementary layer in characters as well, and keep the strongest
+        # raw matches ahead of it for an ordinary fact lookup. Complete source
+        # turns stay in storage; long returned views disclose their sampling.
+        structured: list[dict] = []
         seen_contents: set[str] = set()
+        structured_budget = 12000 if wants_summary else (
+            6000 if _profile_query(query) or _EXECUTION_REQUEST.search(query) else 2000)
+        if wants_summary:
+            candidates.sort(key=lambda evidence: not evidence["id"].startswith("digest_"))
         for evidence in candidates:
-            if len(out) >= structured_limit:
+            if len(structured) >= structured_limit:
                 break
             key = _norm_text(evidence["content"])
-            if key in seen_contents:
+            if key in seen_contents or len(evidence["content"]) > structured_budget:
                 continue
             seen_contents.add(key)
-            out.append(evidence)
-            if evidence.get("source_rid") is not None:
-                source_rid = int(evidence["source_rid"])
-                source = conn.execute(
-                    "SELECT content FROM items WHERE user_id=? AND rid=? AND status='active'",
-                    (user_id, source_rid),
-                ).fetchone()
-                # A rule/fact normally quotes only one span of a message. Its
-                # other sentences remain raw evidence unless the structured
-                # block reproduces the entire stored turn.
-                if source and _norm_text(_evidence_body(evidence["content"])) == _norm_text(source["content"]):
-                    covered_sources.add(source_rid)
+            structured.append(evidence)
+            structured_budget -= len(evidence["content"])
 
-        out.extend(self._search_raw(
-            conn, user_id, qvec, top_k - len(out),
+        raw = self._search_raw(
+            conn, user_id, qvec, top_k,
             1.0 if _current_query(query) else 0.0, query,
-            exclude_source_rids=covered_sources,
-        ))
-        return out[:top_k]
+        )
+        complete_sources: dict[int, dict] = {}
+        for evidence in structured:
+            rid = evidence.get("source_rid")
+            if rid is None:
+                continue
+            source = conn.execute(
+                "SELECT content FROM items WHERE user_id=? AND rid=? AND status='active'",
+                (user_id, int(rid)),
+            ).fetchone()
+            # Deduplicate layers only when the selected derived block quotes
+            # this entire source turn. A single rule span must never hide the
+            # other facts, conditions or exceptions in its original message.
+            if source and _norm_text(_evidence_body(evidence["content"])) == _norm_text(source["content"]):
+                complete_sources.setdefault(int(rid), evidence)
+        strong_rule_ids = {
+            _structured_id("rule", user_id, f"[RULE] {evidence['text']}")
+            for evidence in rules if _single_slot_rule(query, evidence)
+        }
+        def preferred(evidence: dict) -> bool:
+            identity = evidence["id"]
+            return (
+                (wants_summary and identity.startswith("digest_"))
+                or (_profile_query(query) and identity == "profile")
+                or (_current_query(query) and identity.startswith("change_")
+                    and evidence.get("status") == "active")
+                or identity in strong_rule_ids
+            )
+        leading = [evidence for evidence in structured if preferred(evidence)]
+        supplementary = [evidence for evidence in structured if not preferred(evidence)]
+        if raw and raw[0].get("explicit_correction"):
+            correction = raw.pop(0)
+            correction["content"] = (
+                "[EXPLICIT CORRECTION SOURCE; read related earlier statements with this source]\n"
+                + correction["content"]
+            )
+            for evidence in leading + supplementary:
+                shared_topics = (fact_layer._context_tokens(query)
+                    & fact_layer._context_tokens(correction["content"])
+                    & fact_layer._context_tokens(evidence["content"]))
+                if (evidence["id"].startswith("rule_")
+                        and evidence.get("seq", float("inf")) < correction["seq"]
+                        and len(shared_topics) >= 2):
+                    evidence["content"] = (
+                        "[EARLIER RELATED INSTRUCTION; later explicit correction quoted above; "
+                        "do not assume unchanged applicability]\n" + evidence["content"]
+                    )
+                    evidence["id"] = _structured_id("rule", user_id, evidence["content"])
+            leading.insert(0, correction)
+        head_count = min(reserve, max(0, top_k - len(leading)))
+        out = leading + raw[:head_count] + supplementary + raw[head_count:]
+        packed: list[dict] = []
+        seen_evidence: set[int] = set()
+        remaining_chars = 32000
+        for evidence in out:
+            if evidence["id"].startswith("mem_"):
+                # If ordinary relevance puts the source ahead of its complete
+                # derived quote, put that quote at the same position rather
+                # than moving the evidence behind unrelated raw records.
+                evidence = complete_sources.get(evidence.get("source_rid"), evidence)
+            identity = id(evidence)
+            if identity in seen_evidence:
+                continue
+            if len(packed) >= top_k or len(evidence["content"]) > remaining_chars:
+                break
+            packed.append(evidence)
+            seen_evidence.add(identity)
+            remaining_chars -= len(evidence["content"])
+        return packed
 
     @staticmethod
     def _structured_evidence(kind: str, user_id: str, evidence: dict, score: float) -> dict:
@@ -552,6 +715,51 @@ class MemoryStore:
                   if row["rid"] not in excluded]
         ranked.sort(key=lambda pair: pair[0], reverse=True)
 
+        scope, topics = fact_layer.context_scope(query)
+        if scope == "topic-scoped" and topics:
+            # A narrow project summary must not fill its remaining slots with
+            # unrelated personal records. Keep matching sessions so that a
+            # follow-up observation may omit the topic nouns without vanishing.
+            by_session: dict[str, int] = {}
+            for _, row in ranked:
+                overlap = len(topics & fact_layer._context_tokens(row["content"]))
+                by_session[row["session_id"]] = max(by_session.get(row["session_id"], 0), overlap)
+            best_overlap = max(by_session.values(), default=0)
+            if best_overlap:
+                threshold = max(1, math.ceil(best_overlap * .6))
+                related = {session for session, overlap in by_session.items() if overlap >= threshold}
+                best_similarity = ranked[0][0] if ranked else 0.0
+                ranked = [pair for pair in ranked if pair[1]["session_id"] in related
+                          or best_similarity - pair[0] <= .12]
+
+        if scope == "ordinary" and _FACT_LOOKUP.search(query) and not _sequence_query(query):
+            # Top K is a maximum, not a request to pad a precise answer with
+            # arbitrary history. Only a pronounced semantic separation plus
+            # lexical support for the head enables this conservative cutoff.
+            topic = fact_layer._context_tokens(query)
+            best_overlap = max((len(topic & fact_layer._context_tokens(row["content"]))
+                                for _, row in ranked[:3]), default=0)
+            if best_overlap >= 2:
+                for index in range(1, min(32, len(ranked))):
+                    if ranked[index - 1][0] - ranked[index][0] >= .35:
+                        needed = max(2, math.ceil(best_overlap * .6))
+                        ranked = ranked[:index] + [pair for pair in ranked[index:]
+                            if len(topic & fact_layer._context_tokens(pair[1]["content"])) >= needed]
+                        break
+
+        correction_rids: set[int] = set()
+        if ranked and not _chronology_query(query):
+            topic = fact_layer._context_tokens(query)
+            best_similarity = ranked[0][0]
+            corrections = [pair for pair in ranked
+                if best_similarity - pair[0] <= .15 and _CORRECTION_CUE.search(pair[1]["content"])
+                and len(topic & fact_layer._context_tokens(pair[1]["content"])) >= 2]
+            if corrections:
+                correction = max(corrections, key=lambda pair: (pair[1]["seq"], pair[1]["rid"]))
+                ranked.remove(correction)
+                ranked.insert(0, correction)
+                correction_rids.add(correction[1]["rid"])
+
         if ranked and _INITIAL_QUERY.search(query):
             # An explicit request for the original value can be answered by a
             # later description with very similar embedding vocabulary. Prefer
@@ -586,20 +794,21 @@ class MemoryStore:
                 start = stop
 
         selected: list[tuple[float, sqlite3.Row]] = []
-        seen: set[tuple[str, str, float]] = set()
+        seen: set[int] = set()
 
         def take(pair: tuple[float, sqlite3.Row]) -> None:
             _, row = pair
             if len(selected) >= limit or row["rid"] in excluded:
                 return
-            # Identical observations on different days/sessions remain events.
-            # Only a repeated presentation of the same stored turn collapses.
-            key = (_norm_text(row["content"]), row["session_id"], row["created_at"])
+            # Two rows are two observations, even when the speaker, timestamp
+            # and wording match. Network retries are deduplicated at Add via
+            # request_id; retrieval must not erase genuine repetitions.
+            key = row["rid"]
             if key not in seen:
                 seen.add(key)
                 selected.append(pair)
 
-        chronology = _chronology_query(query)
+        chronology = _sequence_query(query)
         if chronology and limit >= 3:
             sessions: dict[str, list[tuple[float, sqlite3.Row]]] = {}
             positions: dict[int, int] = {}
@@ -609,39 +818,46 @@ class MemoryStore:
                 members.append((float(sim), row))
             # One preceding/following turn gives a retrieved event its local
             # ordering context. Expansion stays in the same user's session.
-            for pair in ranked[:max(1, limit // 3)]:
-                take(pair)
+            for pair in ranked[:min(4, max(1, limit // 3))]:
                 row = pair[1]
                 members = sessions[row["session_id"]]
                 position = positions[row["rid"]]
+                # Order a small local group, then continue with the next best
+                # semantic anchor. Never seq-sort the entire retrieved set.
                 if position > 0:
                     take(members[position - 1])
+                take(pair)
                 if position + 1 < len(members):
                     take(members[position + 1])
         for pair in ranked:
             take(pair)
             if len(selected) >= limit:
                 break
-        if chronology:
-            selected.sort(key=lambda pair: (pair[1]["seq"], pair[1]["rid"]))
-
-        include_source = chronology or _summary_query(query)
         results = []
         for score, row in selected:
             content = row["content"]
             stored_at = _iso(row["created_at"])
-            if include_source:
-                session = json.dumps(row["session_id"], ensure_ascii=False)
+            session = json.dumps(row["session_id"], ensure_ascii=False)
+            excerpted = len(content) > 3200
+            source_chars = len(content)
+            if excerpted:
                 content = (
-                    f"[SOURCE source_rid={row['rid']} session={session} seq={row['seq']} "
-                    f"role={row['role']} stored_at={stored_at}; "
-                    "stored record timestamp, not event occurrence time]\n" + content
+                    "[QUERY-FOCUSED SOURCE EXCERPTS; additional source text omitted; "
+                    "complete source retained at source_rid]\n" + _query_preview(content, query)
                 )
+            content = (
+                f"[SOURCE source_rid={row['rid']} session={session} seq={row['seq']} "
+                f"role={row['role']} stored_at={stored_at}; "
+                "stored record timestamp, not event occurrence time]\n" + content
+            )
             result = {"id": f"mem_{row['rid']}", "content": content,
                       "score": round(0.5 + 0.4 * score, 6), "created_at": stored_at}
-            if include_source:
-                result.update(source_rid=row["rid"], session_id=row["session_id"],
-                              seq=row["seq"], role=row["role"], stored_at=stored_at)
+            result.update(source_rid=row["rid"], session_id=row["session_id"],
+                          seq=row["seq"], role=row["role"], stored_at=stored_at)
+            if row["rid"] in correction_rids:
+                result["explicit_correction"] = True
+            if excerpted:
+                result.update(excerpt=True, source_chars=source_chars)
             results.append(result)
         return results
 

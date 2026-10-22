@@ -125,7 +125,8 @@ _QUESTION_EN = re.compile(r"\?$|^(what|how|why|when|where|who|which|is|are|do|do
 _EN_VERBS = frozenset(
     "use keep reply respond answer write call avoid prefer include start end "
     "format return provide ensure make list explain summarize cite verify "
-    "check confirm stop remember".split()
+    "check confirm stop remember disclose protect retain mark omit redact specify "
+    "separate report convert measure calculate validate quote".split()
 )
 _ZH_INSTR = re.compile(r"(要|请|必须|不要|别|记得|优先|务必|改用|避免|保持|按照|首先|先)")
 
@@ -499,6 +500,7 @@ CREATE TABLE IF NOT EXISTS facts (
     status     TEXT NOT NULL DEFAULT 'active',
     previous_value TEXT,
     created_at REAL NOT NULL,
+    source_role TEXT NOT NULL DEFAULT 'unknown',
     seq        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_facts_user ON facts(user_id, status, kind);
@@ -524,6 +526,11 @@ CREATE TABLE IF NOT EXISTS digests (
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     conn.executescript(DIGEST_SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(facts)")}
+    if "source_role" not in columns:
+        # Existing rows remain unknown. Source attribution can be read from a
+        # retained item, but migration never invents a speaker for old facts.
+        conn.execute("ALTER TABLE facts ADD COLUMN source_role TEXT NOT NULL DEFAULT 'unknown'")
 
 
 def store_facts(
@@ -545,22 +552,24 @@ def store_facts(
     facts = extract_facts(text, relaxed=(role == "system"))
     if role not in {"user", "system"}:
         facts = [f for f in facts if f.kind != "rule"]
-    # "self.*" facts may come from any role: in some benchmark datasets the
-    # patient's own words sit in the assistant turn (the assistant plays the
-    # doctor). Restricting to role=user emptied the profile for exactly those
-    # sessions, which is what E3 depends on. Junk is filtered by value shape
-    # instead (see _SELF_BAD below).
-    _ = role
+    # First-person assertions belong to their source speaker. Keep assistant
+    # background retrievable with attribution, without letting it retire a
+    # user's first-person assertion of the same attribute.
+    source_role = str(role or "unknown")
     written = 0
+    prepared_keys = set()
     for f in facts:
+        if (f.subject, f.predicate) not in prepared_keys:
+            _resolve_legacy_roles(conn, user_id, f.subject, f.predicate, before_seq=seq)
+            prepared_keys.add((f.subject, f.predicate))
         if f.operation == "retract":
             # Negating an old employer is not an assertion of a new location.
             # Match the named value exactly so denying an older state cannot
             # erase an unrelated, newer state on the same attribute.
             rows = conn.execute(
                 "SELECT fid,value FROM facts WHERE user_id=? AND subject=?"
-                " AND predicate=? AND status='active'",
-                (user_id, f.subject, f.predicate),
+                " AND predicate=? AND source_role=? AND status='active'",
+                (user_id, f.subject, f.predicate, source_role),
             ).fetchall()
             for row in rows:
                 if _clean(row["value"]).casefold() == f.value.casefold():
@@ -571,8 +580,8 @@ def store_facts(
         # identical fact already active -> nothing to do
         dup = conn.execute(
             "SELECT fid FROM facts WHERE user_id=? AND subject=? AND predicate=?"
-            " AND value=? AND status='active'",
-            (user_id, f.subject, f.predicate, f.value),
+            " AND value=? AND source_role=? AND status='active'",
+            (user_id, f.subject, f.predicate, f.value, source_role),
         ).fetchone()
         if dup:
             if single_valued:
@@ -580,8 +589,8 @@ def store_facts(
                 # even when this assertion repeats one of those values.
                 conn.execute(
                     "UPDATE facts SET status='stale' WHERE user_id=? AND subject=?"
-                    " AND predicate=? AND status='active' AND fid<>?",
-                    (user_id, f.subject, f.predicate, dup[0]),
+                    " AND predicate=? AND source_role=? AND status='active' AND fid<>?",
+                    (user_id, f.subject, f.predicate, source_role, dup[0]),
                 )
             continue
 
@@ -589,23 +598,23 @@ def store_facts(
         if single_valued:
             row = conn.execute(
                 "SELECT fid, value FROM facts WHERE user_id=? AND subject=? AND predicate=?"
-                " AND status='active' ORDER BY seq DESC, fid DESC LIMIT 1",
-                (user_id, f.subject, f.predicate),
+                " AND source_role=? AND status='active' ORDER BY seq DESC, fid DESC LIMIT 1",
+                (user_id, f.subject, f.predicate, source_role),
             ).fetchone()
             if row:
                 previous = row[1]
                 conn.execute(
                     "UPDATE facts SET status='stale' WHERE user_id=? AND subject=?"
-                    " AND predicate=? AND status='active'",
-                    (user_id, f.subject, f.predicate),
+                    " AND predicate=? AND source_role=? AND status='active'",
+                    (user_id, f.subject, f.predicate, source_role),
                 )
 
         conn.execute(
             "INSERT INTO facts(user_id,session_id,source_rid,subject,predicate,value,kind,"
-            "confidence,status,previous_value,created_at,seq)"
-            " VALUES(?,?,?,?,?,?,?,?,'active',?,?,?)",
+            "confidence,status,previous_value,created_at,seq,source_role)"
+            " VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?)",
             (user_id, session_id, source_rid, f.subject, f.predicate, f.value, f.kind,
-             f.confidence, previous, created_at, seq),
+             f.confidence, previous, created_at, seq, source_role),
         )
         written += 1
     return written
@@ -635,6 +644,74 @@ def _has_items(conn: sqlite3.Connection) -> bool:
     ).fetchone() is not None
 
 
+def _resolve_legacy_roles(conn: sqlite3.Connection, user_id: str, subject: str, predicate: str,
+                          *, before_seq: int | None = None) -> None:
+    """Repair one legacy key only when its retained source proves a role.
+
+    Earlier stores could retire a user's 'I' after an assistant's 'I'. Replay
+    the original assertions and retractions independently per source speaker;
+    never reactivate an old fact merely because its role is now known.
+    """
+    if not _has_items(conn):
+        return
+    proven = conn.execute(
+        "SELECT f.fid,i.role FROM facts f JOIN items i ON i.user_id=f.user_id AND i.rid=f.source_rid"
+        " WHERE f.user_id=? AND f.subject=? AND f.predicate=? AND f.source_role='unknown'"
+        " AND i.status='active' AND i.role IN ('user','assistant','system','tool')",
+        (user_id, subject, predicate),
+    ).fetchall()
+    if not proven:
+        return
+    conn.execute("SAVEPOINT fact_role_replay")
+    try:
+        conn.executemany("UPDATE facts SET source_role=? WHERE fid=?",
+                         [(row["role"],row["fid"]) for row in proven])
+        stored = conn.execute("SELECT * FROM facts WHERE user_id=? AND subject=? AND predicate=? ORDER BY seq,fid",
+                              (user_id,subject,predicate)).fetchall()
+        single = any(row["kind"] == "fact" or row["subject"] == "favorite" for row in stored)
+        if single:
+            sources = conn.execute("SELECT role,content,seq FROM items WHERE user_id=? AND status='active'"
+                                   " AND (? IS NULL OR seq<?) ORDER BY seq,rid",
+                                   (user_id,before_seq,before_seq)).fetchall()
+            state = {}
+            for source in sources:
+                role = source["role"]
+                for fact in extract_facts(source["content"],relaxed=(role == "system")):
+                    if (fact.subject,fact.predicate) != (subject,predicate):
+                        continue
+                    current = state.get(role, {"value":None,"previous":None})
+                    if fact.operation == "retract":
+                        if current["value"] is not None and current["value"].casefold() == fact.value.casefold():
+                            state[role] = {"value":None,"previous":None}
+                    else:
+                        previous = current["previous"] if current["value"] == fact.value else current["value"]
+                        state[role] = {"value":fact.value,"previous":previous}
+            for role in {row["source_role"] for row in stored} - {"unknown"}:
+                if role not in state:
+                    continue
+                value = state[role]["value"]
+                matching = [row for row in stored if row["source_role"] == role and value is not None
+                            and row["value"].casefold() == value.casefold()]
+                active_id = matching[-1]["fid"] if matching else None
+                for row in stored:
+                    if row["source_role"] == role:
+                        conn.execute("UPDATE facts SET status=?,previous_value=? WHERE fid=?",
+                                     ("active" if row["fid"] == active_id else "stale",
+                                      state[role]["previous"] if row["fid"] == active_id else None,row["fid"]))
+        conn.execute("RELEASE SAVEPOINT fact_role_replay")
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT fact_role_replay")
+        conn.execute("RELEASE SAVEPOINT fact_role_replay")
+        raise
+
+
+def _prepare_user_roles(conn: sqlite3.Connection, user_id: str) -> None:
+    keys = conn.execute("SELECT DISTINCT subject,predicate FROM facts WHERE user_id=? AND source_role='unknown'",
+                        (user_id,)).fetchall()
+    for key in keys:
+        _resolve_legacy_roles(conn,user_id,key["subject"],key["predicate"])
+
+
 def _recorded_time(value: float | None) -> str:
     try:
         return datetime.fromtimestamp(float(value), timezone.utc).isoformat().replace("+00:00", "Z")
@@ -654,8 +731,8 @@ def _source_label(row: dict) -> str:
 
 def _with_source(conn: sqlite3.Connection, row: sqlite3.Row | dict, has_items: bool) -> dict:
     result = dict(row)
-    result["role"] = "unknown"
-    if has_items and result.get("source_rid") is not None:
+    result["role"] = result.get("source_role") or "unknown"
+    if result["role"] == "unknown" and has_items and result.get("source_rid") is not None:
         source = conn.execute(
             "SELECT role FROM items WHERE user_id=? AND rid=?",
             (result["user_id"], result["source_rid"]),
@@ -663,6 +740,30 @@ def _with_source(conn: sqlite3.Connection, row: sqlite3.Row | dict, has_items: b
         if source:
             result["role"] = source["role"]
     return result
+
+
+_CARE_QUERY = re.compile(r"\b(?:health|illness|allerg\w*|medication|condition|care|diagnos\w*|anxiety|depression)\b|健康|病情|过敏|服药|心理|焦虑|抑郁|关怀", re.I)
+_ASSISTANT_QUERY = re.compile(
+    r"\b(?:did|does|is|was|has)\s+(?:the\s+)?(?:assistant|chatbot|bot)\b"
+    r"|\b(?:assistant|chatbot|bot)(?:'s\b|\s+(?:say|said|mention|stated|lives?|works?|prefers?|is|was)\b)"
+    r"|(?:助手|助理)(?:说|提到|表示|的|住|工作)", re.I,
+)
+
+
+def _speaker_relevant(row: dict, query: str, *, background: bool = False) -> bool:
+    """Avoid presenting another speaker's 'I' as the user's current state."""
+    if row.get("subject") not in {"self", "pref", "favorite"}:
+        return True
+    role = row.get("role", "unknown")
+    if _ASSISTANT_QUERY.search(query):
+        return role in {"assistant", "unknown"}
+    if role != "assistant":
+        return True
+    # Source-labelled care evidence is useful even when the conversation is a
+    # dialogue or a role play. Its speaker remains explicit in the result.
+    return bool(_CARE_QUERY.search(query)) and (background or row.get("predicate") in {
+        "condition", "medication", "allergy", "metric", "health", "血压", "血糖", "体重", "心率",
+    })
 
 
 def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items: bool) -> str:
@@ -682,9 +783,34 @@ def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items:
     if not source:
         return value
     needle = _clean(row["value"]).casefold()
-    matches = [sentence for sentence in _source_sentences(source["content"])
+    sentences = _source_sentences(source["content"])
+    matches = [index for index, sentence in enumerate(sentences)
                if needle in sentence.casefold()]
-    return matches[0] if len(matches) == 1 else value
+    if len(matches) != 1:
+        return value
+    index = matches[0]
+    linked = [sentences[index]]
+    # Adjacent exceptions qualify the rule, rather than constituting another
+    # independent instruction. Stop at unrelated narration or a new rule.
+    for sentence in sentences[index + 1:index + 4]:
+        if not re.match(r"\s*(?:exception\b|except\b|unless\b|however\b|but\b|otherwise\b|注意|例外|但是|但若|除非|否则|不过)", sentence, re.I):
+            break
+        linked.append(sentence)
+    return " ".join(linked)
+
+
+_EXECUTION_QUERY = re.compile(
+    r"\b(?:write|draft|compose|create|generate|format|reply|respond|answer|summari[sz]e|prepare|produce|translate|rewrite|explain|apply)\b"
+    r"|(?:请|帮我|替我).*(?:写|生成|回答|回复|总结|整理|翻译|解释|应用)|^(?:写|生成|回答|回复|总结|整理|翻译|解释|应用)", re.I,
+)
+_GLOBAL_RULE = re.compile(
+    r"^\s*(?:please\s+)?(?:always|never|from\s+now\s+on)\b"
+    r"|\b(?:all|every|each)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b"
+    r"|(?:以后|今后|从现在开始).*(?:回答|回复|输出)|(?:每次|所有|全部).{0,6}(?:回答|回复|输出)", re.I,
+)
+_LOCAL_RULE = re.compile(r"^\s*(?:if|when|whenever)\b|^\s*(?:如果|当|若)|\b(?:in|for|during|within|while)\s+\S|(?:针对|用于|在).{1,30}(?:时|中|期间)", re.I)
+_RESPONSE_SCOPE = re.compile(r"\b(?:all|every|each|your|future|subsequent)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b|以后.*(?:回答|回复|输出)|所有.{0,5}(?:回答|回复|输出)",re.I)
+_OUTPUT_POLICY = re.compile(r"\b(?:repl\w*|respond\w*|answer\w*|output\w*|format\w*|language|tone|sentences?|headings?|units?|metric|cit\w*|sources?|uncertainty|confidence|assumptions?|dates?|privacy|private|addresses?|redact\w*)\b|回答|回复|输出|格式|语言|单位|引用|来源|置信|隐私|地址",re.I)
 
 
 def relevant_rules(
@@ -698,9 +824,10 @@ def relevant_rules(
     """
     if limit <= 0:
         return []
+    _prepare_user_roles(conn,user_id)
     rows = conn.execute(
         "SELECT fid,user_id,session_id,source_rid,subject,predicate,value,kind,"
-        "confidence,status,created_at,seq FROM facts"
+        "confidence,status,created_at,seq,source_role FROM facts"
         " WHERE user_id=? AND kind='rule' AND status='active'"
         " ORDER BY seq,fid", (user_id,),
     ).fetchall()
@@ -708,18 +835,33 @@ def relevant_rules(
     asks_rules = any(word in query.lower() for word in (
         "rule", "instruction", "guideline", "constraint", "规则", "指令", "要求", "约束",
     ))
+    rule_query = re.sub(r"规则|指令|要求|约束|哪些|什么|遵守|执行|适用|应该|需要|请|怎么", " ", query)
+    rule_topics = _tokens(rule_query) - frozenset(
+        "rule rules instruction instructions guideline guidelines constraint constraints "
+        "apply applies applicable follow following standing list enumerate remember saved stored "
+        "must shall required requirements govern governs governing".split()
+    )
+    asks_all_rules = asks_rules and (not rule_topics or bool(re.search(
+        r"\b(?:all|every)\s+(?:standing\s+)?(?:rules|instructions|constraints)\b|所有.{0,5}(?:规则|指令|约束)", query, re.I,
+    )))
     has_items = _has_items(conn)
+    executing = bool(_EXECUTION_QUERY.search(query))
     ranked = []
     for row in rows:
         value = _complete_source_rule(conn, row, has_items)
         overlap = len(q & _tokens(value + " " + row["predicate"]))
-        if not overlap and (not asks_rules or row["confidence"] < 0.6):
+        explicit_response = bool(_RESPONSE_SCOPE.search(value))
+        conditional_rule = bool(re.match(r"\s*(?:if|when|whenever)\b|\s*(?:如果|当|若)",value,re.I))
+        global_rule = (bool(_GLOBAL_RULE.search(value)) and not conditional_rule
+                       and (explicit_response or not _LOCAL_RULE.search(value) and bool(_OUTPUT_POLICY.search(value)))
+                       and row["confidence"] >= .6)
+        if not overlap and not (executing and global_rule) and (not asks_all_rules or row["confidence"] < 0.6):
             continue
-        score = overlap / max(1.0, len(q) ** 0.5) + (0.15 if asks_rules else 0.0)
-        ranked.append((score, row, value))
+        score = overlap / max(1.0, len(q) ** 0.5) + (0.15 if asks_rules else 0.0) + (.2 if executing and global_rule else 0)
+        ranked.append((score, row, value, global_rule))
     ranked.sort(key=lambda item: (-item[0], -item[1]["seq"], -item[1]["fid"]))
     out, seen = [], set()
-    for score, row, value in ranked:
+    for score, row, value, global_rule in ranked:
         key = (row["source_rid"], value.casefold())
         if key in seen:
             continue
@@ -727,6 +869,7 @@ def relevant_rules(
         result = _with_source(conn, row, has_items)
         result["text"] = _source_label(result) + " " + value
         result["score"] = round(score, 6)
+        result["scope"] = "global" if global_rule else "local"
         out.append(result)
         if len(out) >= limit:
             break
@@ -778,22 +921,26 @@ def change_history(
     """
     if limit <= 0:
         return []
+    _prepare_user_roles(conn,user_id)
     rows = conn.execute(
         "SELECT fid,user_id,session_id,source_rid,subject,predicate,value,kind,"
-        "confidence,status,previous_value,created_at,seq FROM facts"
+        "confidence,status,previous_value,created_at,seq,source_role FROM facts"
         " WHERE user_id=? AND kind IN ('fact','preference') AND status IN ('active','stale')"
         " ORDER BY seq,fid", (user_id,),
     ).fetchall()
-    groups: dict[tuple[str, str], list] = {}
+    groups: dict[tuple[str, str, str], list] = {}
+    has_items = _has_items(conn)
     for row in rows:
-        groups.setdefault((row["subject"], row["predicate"]), []).append(row)
+        attributed = _with_source(conn, row, has_items)
+        if _speaker_relevant(attributed, query):
+            groups.setdefault((row["subject"], row["predicate"], attributed["role"]), []).append(attributed)
     q = _tokens(query)
     wants_history = any(word in query.lower() for word in _HISTORY_WORDS)
     ranked = []
     for key, history in groups.items():
         if not any(row["status"] == "stale" or row["previous_value"] for row in history):
             continue
-        subject, predicate = key
+        subject, predicate, source_role = key
         terms = _tokens(f"{subject} {predicate} " + _ATTRIBUTE_TERMS.get(predicate, ""))
         terms |= set().union(*(_tokens(row["value"]) for row in history))
         overlap = len(q & terms)
@@ -850,21 +997,26 @@ def match_facts(
     """
     if limit <= 0:
         return []
+    _prepare_user_roles(conn,user_id)
     intent_kinds = intent_kinds or set()
     q = _tokens(query)
     rows = conn.execute(
-        "SELECT f.fid,f.subject,f.predicate,f.value,f.kind,f.confidence,"
-        " f.previous_value,f.created_at,f.status,"
+        "SELECT f.*,"
         " (SELECT live.value FROM facts live WHERE live.user_id=f.user_id"
-        "  AND live.subject=f.subject AND live.predicate=f.predicate AND live.status='active'"
+        "  AND live.subject=f.subject AND live.predicate=f.predicate AND live.source_role=f.source_role AND live.status='active'"
         "  ORDER BY live.seq DESC,live.fid DESC LIMIT 1) AS current_value"
         " FROM facts f WHERE f.user_id=? AND f.status IN ('active','stale')"
         " ORDER BY f.confidence DESC, f.fid DESC LIMIT 400",
         (user_id,),
     ).fetchall()
     scored = []
-    for r in rows:
-        hay = f"{r['subject']} {r['predicate']} {r['value']}".replace("_", " ")
+    has_items = _has_items(conn)
+    for stored in rows:
+        r = _with_source(conn, stored, has_items)
+        if not _speaker_relevant(r, query):
+            continue
+        hay = (f"{r['subject']} {r['predicate']} {r['value']} "
+               + _ATTRIBUTE_TERMS.get(r["predicate"], "")).replace("_", " ")
         toks = _tokens(hay)
         overlap = (len(q & toks) / (len(q) ** 0.5)) if q and toks else 0.0
         wanted = r["kind"] in intent_kinds
@@ -885,7 +1037,9 @@ def match_facts(
                      else " (no active value recorded)")
         elif r["previous_value"]:
             text += f"  (changed from: {r['previous_value']})"
-        out.append({"score": round(score, 6), "text": text, "kind": r["kind"]})
+        result = dict(r)
+        result.update(score=round(score, 6), text=text + " " + _source_label(r))
+        out.append(result)
     return out
 
 
@@ -906,13 +1060,17 @@ def build_profile(conn: sqlite3.Connection, user_id: str, query: str = "", max_i
     application): the one rule that governs the question is rarely in the first
     five rows, so the digest has to be query-conditioned to be useful.
     """
+    _prepare_user_roles(conn,user_id)
     rows = conn.execute(
-        "SELECT subject,predicate,value,kind,confidence,previous_value FROM facts"
+        "SELECT * FROM facts"
         " WHERE user_id=? AND status='active' ORDER BY"
         "  CASE kind WHEN 'rule' THEN 0 WHEN 'preference' THEN 1 ELSE 2 END,"
         "  confidence DESC, fid DESC LIMIT 400",
         (user_id,),
     ).fetchall()
+    has_items = _has_items(conn)
+    rows = [_with_source(conn, row, has_items) for row in rows]
+    rows = [row for row in rows if _speaker_relevant(row, query, background=True)]
     if not rows:
         return ""
 
@@ -929,13 +1087,13 @@ def build_profile(conn: sqlite3.Connection, user_id: str, query: str = "", max_i
     # E3 ("personal background, health and emotional care") went 100 -> 0.00 on
     # the smoke run that shipped the conditioned version. `query` is kept in the
     # signature only for callers; it must not reorder this digest.
-    _ = query
     # Identity first. The personal-info corpus holds 34 facts/user but the
     # profile spent its whole budget on "dislikes X because Y" and hid
     # name/age/city -- which is what E3 (background & care) asks about.
     identity = {"name", "age", "location", "work", "role", "condition",
                 "allergy", "medication", "metric", "origin", "nickname"}
     rows.sort(key=lambda r: (
+        1 if r["role"] == "assistant" else 0,
         0 if (r["subject"] == "self" and r["predicate"] in identity) else 1,
         1 if r["kind"] == "preference" else 0,
     ))
@@ -944,16 +1102,17 @@ def build_profile(conn: sqlite3.Connection, user_id: str, query: str = "", max_i
     rules, prefs, facts = [], [], []
     for r in rows:
         if r["kind"] == "rule":
-            rules.append(_display_rule(r["predicate"], r["value"]))
+            rules.append(_display_rule(r["predicate"], r["value"]) + " " + _source_label(r))
         elif r["kind"] == "preference":
             verb = "likes" if r["predicate"] == "like" else (
                 "dislikes" if r["predicate"] == "dislike" else r["predicate"])
             # 82% of preference values carried a "because ..." rationale, which
             # burns the profile budget without adding recall.
             val = re.split(r"\s+because\b|\s*因为", r["value"])[0].strip()[:60]
-            prefs.append(f"{verb} {val}")
+            prefs.append(f"{verb} {val} " + _source_label(r))
         else:
-            facts.append(f"{r['subject']}.{r['predicate']}={r['value']}")
+            owner = "assistant-stated " if r["role"] == "assistant" else ""
+            facts.append(f"{owner}{r['subject']}.{r['predicate']}={r['value']} " + _source_label(r))
     parts = []
     if rules:
         parts.append("rules: " + "; ".join(list(dict.fromkeys(rules))[:5]))
@@ -1047,7 +1206,7 @@ _SUMMARY_WORDS = (
 )
 
 
-def get_digests(conn: sqlite3.Connection, user_id: str, query: str, limit: int = 2) -> list[str]:
+def _legacy_digests(conn: sqlite3.Connection, user_id: str, query: str, limit: int = 2) -> list[str]:
     """Relevant session evidence, with broad coverage for aggregate queries.
 
     Candidate selection has no session-count cutoff. For a global query,
@@ -1104,6 +1263,267 @@ def get_digests(conn: sqlite3.Connection, user_id: str, query: str, limit: int =
         views = [_compact_digest(row["content"], per_session) for row in group]
         out.append("[DIGEST] Cross-session source evidence; no event chronology inferred.\n"
                    + "\n".join(views))
+    return out
+
+
+_CONTEXT_FILLER = frozenset((
+    "summary summarize summarise overall everything across total recap overview compare "
+    "pattern patterns trend trends many much calculate compute average mean median count "
+    "frequency probability simulate simulation predict prediction estimate expected "
+    "please give provide show tell write draft explain find use based using data result "
+    "results observation observations trial trials record records history session sessions "
+    "conversation conversations discussed entire complete whole so far latest earlier "
+    "all each every including following information describe review list".split()
+))
+_CONTEXT_PHRASES = re.compile(
+    r"(?:请帮我|帮我|请|总结|汇总|总体|全部|一共|多少|规律|趋势|整体|回顾|比较|"
+    r"计算|平均|模拟|预测|估算|概率|所有|各次|每次|历史|记录|会话|讨论|数据|观测|结果|报告)", re.I,
+)
+_AGGREGATE_QUERY = re.compile(
+    r"\b(?:average|mean|median|sum|count|calculate|compute|frequency|probabilit\w*|"
+    r"predict\w*|simulat\w*|forecast\w*|estimate|expected|infer|distribution)\b"
+    r"|计算|平均|模拟|预测|估算|概率|频率|分布|统计|拟合|推算", re.I,
+)
+_GLOBAL_CONTEXT = re.compile(
+    r"\b(?:all|entire|whole)\s+(?:(?:my|our|the|previous|past)\s+)?(?:history|sessions|conversations|topics)\b"
+    r"|\beverything\s+(?:we|i|you|discussed|so\s+far)\b"
+    r"|(?:全部|所有|整个|完整).{0,6}(?:历史|会话|对话|话题)|跨(?:全部|所有)?会话|至今(?:讨论|聊过)", re.I,
+)
+
+
+def _context_tokens(text: str) -> set[str]:
+    tokens = _tokens(_CONTEXT_PHRASES.sub(" ", text)) - _CONTEXT_FILLER
+    # A minimal inflection normalization improves topic matching without
+    # conflating arbitrary substring matches or changing source wording.
+    return {token[:-1] if len(token) > 4 and token.endswith("s") and not token.endswith("ss") else token
+            for token in tokens}
+
+
+def context_scope(query: str) -> tuple[str, set[str]]:
+    """Shared intent and topical vocabulary for downstream raw filtering."""
+    topics = _context_tokens(query)
+    requested = any(word in query.lower() for word in _SUMMARY_WORDS) or bool(_AGGREGATE_QUERY.search(query))
+    if not requested:
+        return "ordinary", topics
+    return ("global" if _GLOBAL_CONTEXT.search(query) or not topics else "topic-scoped"), topics
+
+
+def _bridge_sessions(units: list[dict], selected: set[str]) -> set[str]:
+    """Keep a lexical entity bridge between already relevant source sessions.
+
+    Capitalized entity tokens provide conservative joins. Generic topical
+    vocabulary alone cannot connect every document in a user's history.
+    """
+    entities, topical = {}, {}
+    ignore = {"the","this","that","these","those","always","never","please","source","if","when","where","what","how","who","which"}
+    for unit in units:
+        names = {word.casefold() for word in re.findall(r"\b[A-Z][A-Za-z0-9_-]{2,}\b",unit["text"])} - ignore
+        entities.setdefault(unit["session_id"],set()).update(names)
+        topical[unit["session_id"]] = max(topical.get(unit["session_id"],0),unit.get("overlap",0))
+    selected = set(selected)
+    for _ in range(3):
+        joined = set().union(*(entities.get(session,set()) for session in selected)) if selected else set()
+        bridges = {session for session,names in entities.items() if session not in selected and (
+            bool(names & joined) and topical.get(session,0) > 0
+            or len(names & joined) >= 2 and sum(bool(names & entities.get(seed,set())) for seed in selected) >= 2)}
+        if not bridges:
+            break
+        selected.update(bridges)
+    return selected
+
+
+_NUMERIC_LITERAL = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?")
+
+
+def _numeric_template(text: str) -> tuple[str, list[str]]:
+    """A reversible literal substitution, never a fitted numerical formula."""
+    values = []
+    slots = _numeric_slots(text,len(_NUMERIC_LITERAL.findall(text)))
+    def replace(match):
+        values.append(match.group(0))
+        return "{" + slots[len(values)-1] + "}"
+    return _NUMERIC_LITERAL.sub(replace, text), values
+
+
+def _numeric_slots(text: str, count: int) -> list[str]:
+    # Pick a namespace absent from the literal source. A user can legitimately
+    # discuss '{n1}'; its spelling must never become a substitution target.
+    prefix = "n"
+    while re.search(r"\{" + re.escape(prefix) + r"\d+\}",text):
+        prefix += "_"
+    return [prefix+str(index+1) for index in range(count)]
+
+
+def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list[str]:
+    """Losslessly share repeated numeric wording while retaining each source.
+
+    Literal templates keep signs, precision, conditions and units exactly as
+    written. Rows remain separate observations, even for identical values.
+    """
+    groups = {}
+    for unit in units:
+        template, values = _numeric_template(unit["text"])
+        key = (unit["session_id"], unit["role"], template)
+        groups.setdefault(key, []).append((unit, values))
+    pieces = []
+    for (session, role, template), members in groups.items():
+        source = f"[SOURCE session={session} role={role}; source_rid@seq/segment identifies each original source]"
+        if compact_numeric and len(members) >= 3 and members[0][1]:
+            slots = _numeric_slots(members[0][0]["text"],len(members[0][1]))
+            constants = {index: values[0] for index, values in enumerate(zip(*(values for _, values in members)))
+                         if len(set(values)) == 1}
+            rendered = template
+            for index, value in constants.items():
+                rendered = rendered.replace("{" + slots[index] + "}", value)
+            variable = [index for index in range(len(members[0][1])) if index not in constants]
+            lines = [source, "Literal source template: " + rendered,
+                     "Rows substitute original numeric strings exactly; no statistical inference. Columns: source_rid@seq/segment"
+                     + "".join(" | " + slots[index] for index in variable)]
+            for unit, values in members:
+                lines.append(f"{unit['source_rid']}@{unit['seq']}/{unit['segment']}"
+                             + "".join(" | " + values[index] for index in variable))
+            pieces.append("\n".join(lines))
+        else:
+            lines = [source]
+            for unit, _ in members:
+                lines.append(f"{unit['source_rid']}@{unit['seq']}/{unit['segment']}: {unit['text']}")
+            pieces.append("\n".join(lines))
+    return pieces
+
+
+def _pack_context(units: list[dict], limit: int, budget_chars: int, scope: str) -> list[str]:
+    total = len(units)
+    budget_chars = max(0, int(budget_chars))
+    if not total or limit <= 0 or budget_chars < 300:
+        return []
+    header = (f"[DIGEST] {scope} source evidence; included={{included}}/{total} source segments; "
+              "coverage={coverage}. Source sequence is provenance, not inferred event chronology. "
+              "Stored timestamps are available on source records, not inferred event dates.\n")
+    chosen = units
+    # The full literal-template representation is attempted before reducing
+    # any evidence. Sampling is a disclosed last resort, never an aggregate.
+    for _ in range(12):
+        # Preserve direct source wording whenever it fits. The reversible
+        # representation is useful for genuinely large repeated measurements,
+        # rather than making an already short record harder to read.
+        pieces = _context_pieces(chosen)
+        reserved_headers = min(limit, len(pieces)) * (len(header) + 100)
+        if sum(len(piece) + 1 for piece in pieces) + reserved_headers > budget_chars:
+            pieces = _context_pieces(chosen, compact_numeric=True)
+        count = min(limit, len(pieces))
+        groups = [[] for _ in range(count)]
+        sizes = [0] * count
+        target = max(1, sum(len(piece) + 1 for piece in pieces) // count)
+        group_index = 0
+        for piece in pieces:
+            if groups[group_index] and sizes[group_index] + len(piece) > target and group_index + 1 < count:
+                group_index += 1
+            groups[group_index].append(piece)
+            sizes[group_index] += len(piece) + 1
+        coverage = "complete for selected source scope" if len(chosen) == total else "truncated; do not treat as complete statistics"
+        prefix = header.format(included=len(chosen), coverage=coverage)
+        out = [prefix + "\n".join(group) for group in groups if group]
+        actual = sum(map(len, out))
+        if actual <= budget_chars:
+            return out
+        if len(chosen) <= 1:
+            # Even one indivisible source may exceed the bound. Label the cut
+            # explicitly; do not silently clip a template row or an exception.
+            prefix = header.format(included=0, coverage="truncated within one source; not complete statistics")
+            source_label = _source_label(chosen[0]) + "\n"
+            allowance = budget_chars - len(prefix) - len(source_label) - 50
+            if allowance <= 0:
+                return []
+            return [prefix + source_label + _evidence_quote(chosen[0]["text"], allowance)]
+        smaller = max(1, min(len(chosen) - 1, int(len(chosen) * budget_chars / actual * .90)))
+        chosen = [units[index] for index in _evidence_indices(total, smaller)]
+    return []
+
+
+def get_digests(
+    conn: sqlite3.Connection, user_id: str, query: str, limit: int = 2,
+    *, budget_chars: int = 48000,
+) -> list[str]:
+    """Build bounded, query-scoped evidence from current original records.
+
+    Cached twelve-line digests are a compatibility fallback only. Source
+    records remain authoritative, so later observations and corrections do
+    not disappear merely because an ingestion-time sample omitted them.
+    """
+    if limit <= 0 or budget_chars <= 0:
+        return []
+    if not _has_items(conn):
+        legacy = _legacy_digests(conn, user_id, query, limit)
+        return _bound_legacy(legacy, budget_chars)
+    rows = conn.execute(
+        "SELECT rid,session_id,role,content,created_at,seq FROM items"
+        " WHERE user_id=? AND status='active' ORDER BY seq,rid", (user_id,),
+    ).fetchall()
+    if not rows:
+        return _bound_legacy(_legacy_digests(conn, user_id, query, limit), budget_chars)
+    scope, topics = context_scope(query)
+    context_request = scope != "ordinary"
+    global_scope = scope == "global"
+    units, scores = [], {}
+    for row in rows:
+        for segment, sentence in enumerate(_source_sentences(str(row["content"]))):
+            overlap = len(topics & _context_tokens(sentence))
+            unit = dict(row)
+            unit.update(source_rid=row["rid"], segment=segment, text=sentence, overlap=overlap)
+            units.append(unit)
+            scores[row["session_id"]] = max(scores.get(row["session_id"], 0), overlap)
+    if not global_scope:
+        best = max(scores.values(), default=0)
+        if best <= 0:
+            return []
+        threshold = max(1, int(best * .6 + .999999))
+        relevant_sessions = {session for session, score in scores.items() if score >= threshold}
+        relevant_sessions = _bridge_sessions(units,relevant_sessions)
+        if context_request:
+            units = [unit for unit in units if unit["session_id"] in relevant_sessions]
+            # A large source can mix a narrow requested topic with pages of
+            # unrelated material. Prefer exact topical spans and neighboring
+            # clauses over uniformly sampling that entire source. Numerical
+            # observations in a matched empirical session remain complete.
+            if (not _AGGREGATE_QUERY.search(query)
+                    and sum(len(unit["text"]) + 40 for unit in units) > budget_chars):
+                anchors = {index for index, unit in enumerate(units)
+                           if unit["overlap"] >= threshold or scores.get(unit["session_id"],0) < threshold}
+                kept = set(anchors)
+                for index in anchors:
+                    for adjacent in (index - 1, index + 1):
+                        if 0 <= adjacent < len(units) and units[adjacent]["source_rid"] == units[index]["source_rid"]:
+                            kept.add(adjacent)
+                units = [unit for index, unit in enumerate(units) if index in kept]
+        else:
+            # An ordinary lookup needs matching evidence rather than a full
+            # unrelated history that happens to share one word.
+            matches = {index for index, unit in enumerate(units)
+                       if unit["session_id"] in relevant_sessions and unit["overlap"] >= threshold}
+            neighbors = set(matches)
+            for index in matches:
+                for adjacent in (index - 1, index + 1):
+                    if 0 <= adjacent < len(units) and units[adjacent]["source_rid"] == units[index]["source_rid"]:
+                        neighbors.add(adjacent)
+            units = [unit for index, unit in enumerate(units) if index in neighbors]
+    return _pack_context(units, limit, budget_chars, "global" if global_scope else "topic-scoped")
+
+
+def _bound_legacy(contents: list[str], budget_chars: int) -> list[str]:
+    out = []
+    remaining = budget_chars
+    for content in contents:
+        if len(content) <= remaining:
+            out.append(content)
+            remaining -= len(content)
+        elif remaining >= 300:
+            excerpt = _compact_digest(content, remaining - 50)
+            if len(excerpt) > remaining - 40:
+                excerpt = excerpt[:remaining - 40]
+            out.append(excerpt + "\n[legacy source view truncated]")
+            break
+        else:
+            break
     return out
 
 

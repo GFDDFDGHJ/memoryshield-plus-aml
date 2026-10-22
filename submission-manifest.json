@@ -1,0 +1,29 @@
+{
+  "version": "2026.10.22-rc3",
+  "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
+  "base_commit": "aed97db67b7dbd6d4d35678b4c0c609cf2050014",
+  "files": {
+    ".gitignore": "4badc3591acc13a5e0c555349355bc6abf10d3c13411c39ba7033a0ca1dd44ff",
+    "README.md": "66bb6e0c3d6db25905f30ba19f08a791f7406fc7043b5d32acd27f1f23e50c7f",
+    "requirements.txt": "2a4f6b3916178d9223d2268046697764c2bf01ebc4594fbb2660693628b30ebd",
+    "app.py": "07d6033fb49a38c28ae83356b6d597ef9c0a6980270750333ef301d1fc5a617b",
+    "config.py": "33a8e6f30121b09a0ef762ed769016d7312f0a5ba113128e66cfc7a2e335a467",
+    "store.py": "40b2d5296a9fb5ab3ed8d9ede4825afa0bdaeeecce0c03ec1756efff6d2de4b2",
+    "facts.py": "76c9e01bc01d0d92191b179a8a5e4cbb0ef6c4c13d6d66cc74debd44eff0f0ee",
+    "governance.py": "1176d62a60ced84f124129fa05736d7df25c8207cb607b8af0592c017b3d11b9",
+    "smoke_test.py": "bcccac8c226456737102ccd49e86751e6b30c36a15b544db51645e7369800075",
+    "test_facts.py": "86718bac0756ef7665fae45df5acc5303d83d32b5157913e9100e09617b05bc5",
+    "test_store_regressions.py": "31be3d6c123e98292f354e4ffc3b06cf06daf0b30d57cc0f151d31ff53aa3f47",
+    "test_api_contract.py": "dab47f21a5de514f01a5d5f5ed2e3238479ad4194734ec7f4a7afbd3529e0393",
+    "start.ps1": "06ecff6814f1b6589aca8abbac059180f2a50cb91aeabd98f80b6da100ca5e90",
+    "test_fact_quality.py": "3d89b655b4cd884968b3643de57d7db3e479a78a55e88ab07146ad6b820b8efe",
+    "test_store_quality.py": "8b6376161da45e80389b359c4f2f9c8d4ad93025fe1cdcba8ea8f3618d964f51",
+    "evaluate_quality.py": "8655c77eebe2d04197c50d9acf8f907102e3d405d0c2172ecdbb8838d40ccdc2",
+    "test_context_facts.py": "841198c5b27ffa26f6cf1eb4383a0ea87393b393a167e9e2a485803d9ef3c242",
+    "test_prefix_retrieval.py": "0bbd4002a6760aa213c83a4d3eaa1c7387492f27b240ea779efe7dfccc7801cf",
+    "evaluate_context_quality.py": "62a5c528b553e50f8b5ca4a9b02b663274eb54783898bc6777699e24575d9672",
+    "watcher.ps1": "7377a905ee5d49c3a8d8075a83b215ed296a9dd9b5c3c1bf6019b6cc448710eb",
+    "run-watcher.cmd": "38ad6fc1364ef01e475678d5a996389d83454b4b166b993b964471116ac11f36",
+    "prepare_submission.py": "e6a47301bff375eaea24f19ce9c820632c8daba40dfacd21bf3040bb5a7fca9b"
+  }
+}

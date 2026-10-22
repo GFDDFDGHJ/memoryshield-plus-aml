@@ -8,7 +8,7 @@ from dataclasses import replace
 from unittest.mock import patch
 
 import store as store_module
-from test_store_regressions import DIM, OfflineMemoryStore
+from test_store_regressions import DIM, OfflineMemoryStore, raw_literal
 
 
 class StoreQualityTests(unittest.TestCase):
@@ -43,11 +43,15 @@ class StoreQualityTests(unittest.TestCase):
         records = ["Language: C++.", "Language: C.", "Offset: +5.", "Offset: -5.",
                    "Version: 1.5.", "Version: 15."]
         self.add(records)
-        self.assertEqual({row["content"] for row in self.raw()}, set(records))
+        self.assertEqual({raw_literal(row) for row in self.raw()}, set(records))
 
-    def test_unicode_case_and_whitespace_duplicates_still_collapse(self):
-        self.add(["Café  opening", "CAFE\u0301\topening"])
-        self.assertEqual(len(self.raw()), 1)
+    def test_unicode_case_and_whitespace_variants_preserve_distinct_sources(self):
+        records = ["Café  opening", "CAFE\u0301\topening"]
+        self.add(records)
+        results = self.raw()
+        self.assertEqual(len(results), 2)
+        self.assertEqual([raw_literal(row) for row in results], records)
+        self.assertEqual(len({row["source_rid"] for row in results}), 2)
 
     def test_identical_events_in_distinct_sessions_survive(self):
         self.add(["I ran 5 km today."], session="morning")
@@ -66,7 +70,7 @@ class StoreQualityTests(unittest.TestCase):
         self.vector(old, .88)
         self.vector(new, .82)
         self.add([old, new])
-        self.assertEqual(self.raw(limit=1)[0]["content"], old)
+        self.assertEqual(raw_literal(self.raw(limit=1)[0]), old)
 
     def test_original_state_is_not_replaced_by_latest(self):
         old, new = "Original code was NX-731.", "Later code became QZ-206."
@@ -74,7 +78,7 @@ class StoreQualityTests(unittest.TestCase):
         self.vector(new, .82)
         self.add([old, new])
         result = self.raw("What was the original access code?", 1)[0]
-        self.assertTrue(result["content"].endswith(old))
+        self.assertEqual(raw_literal(result), old)
 
     def test_original_query_selects_first_within_the_same_topic(self):
         unrelated = "Garden access code before launch: FERN-111."
@@ -84,15 +88,15 @@ class StoreQualityTests(unittest.TestCase):
             self.vector(text, similarity)
         self.add([unrelated, old, new])
         original = self.raw("What was the original studio access code?", 1)[0]
-        self.assertTrue(original["content"].endswith(old))
-        self.assertEqual(self.raw("What was the studio access code?", 1)[0]["content"], new)
+        self.assertEqual(raw_literal(original), old)
+        self.assertEqual(raw_literal(self.raw("What was the studio access code?", 1)[0]), new)
 
     def test_original_query_does_not_promote_a_semantically_distant_record(self):
         old, new = "Studio access code before launch: ALPHA-9.", "Studio access code after launch: BETA-7."
         self.vector(old, .50)
         self.vector(new, .84)
         self.add([old, new])
-        self.assertTrue(self.raw("What was the original studio access code?", 1)[0]["content"].endswith(new))
+        self.assertEqual(raw_literal(self.raw("What was the original studio access code?", 1)[0]), new)
 
     def test_single_slot_current_query_uses_explicit_updated_state(self):
         old, new = "I live in Lisbon.", "I moved to Tallinn."
@@ -109,22 +113,22 @@ class StoreQualityTests(unittest.TestCase):
         self.vector(old, .89)
         self.vector(new, .885)
         self.add([old, new])
-        self.assertEqual(self.raw("What is the current code?", 1)[0]["content"], new)
-        self.assertEqual(self.raw("What was the original code, compared with now?", 1)[0]["content"].splitlines()[-1], old)
+        self.assertEqual(raw_literal(self.raw("What is the current code?", 1)[0]), new)
+        self.assertEqual(raw_literal(self.raw("What was the original code, compared with now?", 1)[0]), old)
 
     def test_current_query_does_not_cross_a_semantic_gap(self):
         old, new = "Code was NX-731.", "Code is now QZ-206."
         self.vector(old, .88)
         self.vector(new, .82)
         self.add([old, new])
-        self.assertEqual(self.raw("What is the current code?", 1)[0]["content"], old)
+        self.assertEqual(raw_literal(self.raw("What is the current code?", 1)[0]), old)
 
     def test_rule_cue_does_not_boost_an_unrelated_raw_message(self):
         relevant, unrelated = "The launch access code is NX-731.", "Never forget the lunch box."
         self.vector(relevant, .80)
         self.vector(unrelated, .79)
         self.add([relevant, unrelated])
-        self.assertEqual(self.raw("What is the launch access code?", 1)[0]["content"], relevant)
+        self.assertEqual(raw_literal(self.raw("What is the launch access code?", 1)[0]), relevant)
 
     def test_chronology_adds_same_session_neighbors_in_source_order(self):
         records = ["Travel planning begins.", "The flight was booked on Monday.",
@@ -136,7 +140,7 @@ class StoreQualityTests(unittest.TestCase):
         self.add(records)
         self.add(["Another user's Wednesday event."], user="other")
         results = self.raw("What happened before and after the hotel confirmation?", 3)
-        self.assertEqual([row["content"].splitlines()[-1] for row in results], records[1:4])
+        self.assertEqual([raw_literal(row) for row in results], records[1:4])
         self.assertEqual([row["seq"] for row in results], [2, 3, 4])
         for row in results:
             self.assertEqual(row["session_id"], "session")
@@ -154,22 +158,23 @@ class StoreQualityTests(unittest.TestCase):
         self.add(records, session="target-session")
         self.add(["Private other-user event."], user="other")
         results = self.raw("What came first?", 3)
-        self.assertEqual([row["content"].splitlines()[-1] for row in results], records)
+        self.assertEqual([raw_literal(row) for row in results], records)
         self.assertTrue(all(row["session_id"] == "target-session" for row in results))
 
     def test_summary_raw_evidence_exposes_source_without_truncating(self):
         text = "A long record " * 100 + "The final conclusion is preserved."
         self.add([text])
         result = self.raw("Summarize the records", 1)[0]
-        self.assertTrue(result["content"].endswith(text))
+        self.assertEqual(raw_literal(result), text)
         self.assertEqual(result["stored_at"], result["created_at"])
 
-    def test_ordinary_raw_content_remains_unchanged(self):
+    def test_ordinary_raw_source_label_preserves_literal_content(self):
         text = "Launch key: NX-731."
         self.add([text])
         result = self.raw("What is the launch key?", 1)[0]
-        self.assertEqual(result["content"], text)
-        self.assertNotIn("stored_at", result)
+        self.assertEqual(raw_literal(result), text)
+        self.assertEqual(result["role"], "user")
+        self.assertEqual(result["session_id"], "session")
 
     def test_short_exact_lookup_keeps_the_raw_record_first(self):
         relevant, other = "The launch access code is NX-731.", "The lunch room is upstairs."
@@ -177,8 +182,10 @@ class StoreQualityTests(unittest.TestCase):
         self.vector(other, .20)
         self.add([relevant, other])
         results = self.memory.search("target", "What is the launch access code?", 2)
-        self.assertEqual(results[0]["content"], relevant)
-        self.assertEqual({row["content"] for row in results}, {relevant, other})
+        self.assertEqual(raw_literal(results[0]), relevant)
+        # Top K is a maximum: unrelated history need not pad an exact lookup.
+        self.assertEqual([raw_literal(row) for row in results], [relevant])
+        self.assertLessEqual(len(results), 2)
 
     def test_order_number_lookup_is_not_a_chronology_query(self):
         records = ["The restaurant menu includes soup.",
@@ -188,8 +195,9 @@ class StoreQualityTests(unittest.TestCase):
             self.vector(text, similarity)
         self.add(records)
         result = self.raw("What is the order number for the telescope?", 3)[0]
-        self.assertEqual(result["content"], records[1])
-        self.assertNotIn("stored_at", result)
+        self.assertEqual(raw_literal(result), records[1])
+        self.assertEqual(result["seq"], 2)
+        self.assertEqual(result["session_id"], "session")
 
     def test_unrelated_background_does_not_precede_a_lookup(self):
         self.add(["My name is Mira.", "I live in Oslo.", "I moved to Bergen.",
@@ -237,7 +245,9 @@ class StoreQualityTests(unittest.TestCase):
         self.add([text])
         results = self.memory.search("target", "What is the launch code for the report?", 10)
         self.assertTrue(any(row["id"].startswith("rule_") for row in results))
-        self.assertTrue(any(row["id"].startswith("mem_") and text == row["content"] for row in results))
+        raw = [row for row in results if row["id"].startswith("mem_")]
+        self.assertTrue(raw)
+        self.assertIn(text, [raw_literal(row) for row in raw])
 
     def test_single_slot_fact_query_is_not_replaced_by_a_weakly_related_rule(self):
         rule = "Always use uppercase for garden labels."
@@ -246,7 +256,7 @@ class StoreQualityTests(unittest.TestCase):
         self.vector(fact, .90)
         self.add([rule, fact])
         result = self.memory.search("target", "What is the uppercase protocol launch code?", 1)[0]
-        self.assertEqual(result["content"], fact)
+        self.assertEqual(raw_literal(result), fact)
 
     def test_single_slot_explicit_rule_query_requires_strong_topic_overlap(self):
         rule = "Always use uppercase for garden labels."
@@ -255,7 +265,7 @@ class StoreQualityTests(unittest.TestCase):
         self.vector(fact, .90)
         self.add([rule, fact])
         result = self.memory.search("target", "Which rule governs the uppercase protocol launch code?", 1)[0]
-        self.assertEqual(result["content"], fact)
+        self.assertEqual(raw_literal(result), fact)
 
     def test_direct_identity_lookup_does_not_disclose_the_full_profile(self):
         self.add(["My name is Mira.", "I live in Oslo.", "I am 32 years old."])

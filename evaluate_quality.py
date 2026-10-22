@@ -273,7 +273,10 @@ def evaluate(store_module, source_root: Path, evaluator_hash: str) -> dict:
                {"raw_count": len(dated), "dates": [r["created_at"] for r in dated]})
         add("exact-repeats", "one-session", [event, event], [BASE_MS, BASE_MS])
         repeated = _raw(memory.search("exact-repeats", "List valve inspections.", 5))
-        record(FIDELITY, "同一会话同一时间完全重复记录折叠", len(repeated) == 1,
+        # Distinct stored source rows can be repeated observations even when
+        # their text and timestamp match. Add request_id handles retries.
+        record(FIDELITY, "同文同时间的不同来源记录保持独立", len(repeated) == 2 and
+               len({row['id'] for row in repeated}) == 2,
                {"raw_count": len(repeated)})
 
         add("owner-a", "shared-session", [
@@ -308,7 +311,7 @@ def evaluate(store_module, source_root: Path, evaluator_hash: str) -> dict:
         totals[category] = {"passed": passed, "total": len(selected),
                             "percent": round(100.0 * passed / len(selected), 2)}
     return {
-        "evaluation": "independent synthetic evidence evaluation v1",
+        "evaluation": "independent synthetic evidence evaluation v2 (source identity)",
         "meaning": "证据覆盖/语义保真/排序回归；不是官方能力分，不推算Smoke得分",
         "source_root": str(source_root),
         "source_sha256": {name: hashlib.sha256((source_root / name).read_bytes()).hexdigest()
