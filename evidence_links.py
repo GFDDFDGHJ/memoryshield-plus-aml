@@ -224,6 +224,7 @@ def _rid(row: Mapping) -> int | None:
 def select_linked_sources(
     rows: Iterable[Mapping], query: str, seed_rids: Iterable[int], *,
     max_sources: int = 8, max_chars: int = 12000,
+    include_seed_rids: Iterable[int] = (),
 ) -> list[dict]:
     """Return additional original background sources with auditable links.
 
@@ -238,7 +239,12 @@ def select_linked_sources(
     plain names require an explicit typed ID in each source. New sources do not
     add identifiers to the frontier. There is no transitive/recency inference.
 
-    The output excludes seeds. Each copy has ``source_rid``, ``dependency_types``
+    The output excludes seeds by default. A caller may explicitly allow only
+    its already excerpted seed RIDs via ``include_seed_rids``; those sources
+    still require the identical query/source identifier and safe quote rules.
+    Their ``seed_background`` quote supplements the SAME original source,
+    never an additional observation. Complete seeds should not be allowed.
+    Each copy has ``source_rid``, ``dependency_types``
     and ``evidence_links`` with original character spans and seed provenance.
     Original ``content`` is neither rewritten nor truncated. Append ``quote``
     to a context, NOT the complete content: ``quote_spans`` identify its literal
@@ -253,6 +259,7 @@ def select_linked_sources(
     if len(users) > 1:
         raise ValueError("identifier linking requires sources for a single user")
     seeds = {int(rid) for rid in seed_rids}
+    included_seeds = seeds & {int(rid) for rid in include_seed_rids}
     records = []
     for position, row in enumerate(materialized):
         rid = _rid(row)
@@ -315,7 +322,7 @@ def select_linked_sources(
 
     candidates = []
     for rid, row, content, mentions, position in records:
-        if rid in seeds:
+        if rid in seeds and rid not in included_seeds:
             continue
         links = []
         for key, anchor in sorted(anchored.items()):
@@ -333,6 +340,8 @@ def select_linked_sources(
         copy.setdefault("content", content)
         copy.update(source_rid=rid, dependency_types=dependencies, evidence_links=links,
                     quote=quote, quote_spans=quote_spans)
+        if rid in included_seeds:
+            copy['seed_background'] = True
         priority = 0 if "revocation" in dependencies else 1
         candidates.append((priority, position, copy))
 

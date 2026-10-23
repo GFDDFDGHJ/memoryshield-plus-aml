@@ -990,11 +990,25 @@ _GLOBAL_RULE = re.compile(
 _LOCAL_RULE = re.compile(r"^\s*(?:if|when|whenever)\b|^\s*(?:如果|当|若)|\b(?:in|for|during|within|while)\s+\S|(?:针对|用于|在).{1,30}(?:时|中|期间)", re.I)
 _RESPONSE_SCOPE = re.compile(r"\b(?:all|every|each|your|future|subsequent)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b|以后.*(?:回答|回复|输出)|所有.{0,5}(?:回答|回复|输出)",re.I)
 _OUTPUT_POLICY = re.compile(r"\b(?:repl\w*|respond\w*|answer\w*|output\w*|format\w*|language|tone|sentences?|headings?|units?|metric|cit\w*|sources?|uncertainty|confidence|assumptions?|dates?|privacy|private|addresses?|redact\w*)\b|回答|回复|输出|格式|语言|单位|引用|来源|置信|隐私|地址",re.I)
+_RULE_QUOTED_CONTENT = re.compile(r'"[^"\n]*"|“[^”\n]*”|`[^`\n]*`')
+_RESPONSE_DOMAIN = re.compile(
+    r"\b(?:responses?|repl(?:y|ies)|answers?|outputs?)\s+(?:about|regarding|concerning)\s+\S"
+    r"|\b(?:responses?|repl(?:y|ies)|answers?|outputs?)\s+to\s+"
+    r"(?!(?:me|us|you|them|the\s+user|the\s+point)\b|(?:be|remain|stay|begin|start|end|include|contain|use|avoid)\b)\S"
+    r"|\b(?:responses?|repl(?:y|ies)|answers?|outputs?)\s+for\s+"
+    r"(?!(?:me|us|you|them|the\s+user|clarity|brevity|readability|privacy|safety|consistency)\b)\S", re.I)
+_REQUEST_SCOPED_CONDITION = re.compile(
+    r"\b(?:if|when|whenever)\s+(?:(?:I|we|you|the\s+user|users?)\s+"
+    r"(?:(?:am|are|is)\s+)?(?:ask\w*|request\w*|quer\w*|mention\w*)\b"
+    r"|(?:answering|responding|discussing|handling)\b|(?:the\s+)?(?:question|request|topic|prompt)\b)", re.I)
 
 
 def _global_response_rule(value: str, confidence: float = 1.0) -> bool:
     """One scope decision for dedicated rules and global context protection."""
     semantics = re.sub(r'^\s*(?:[-*\u2022]|\d+[.)])\s+', '', value)
+    # Literal output examples do not define the rule's applicability domain.
+    # The complete original wording is still quoted by relevant_rules.
+    semantics = _RULE_QUOTED_CONTENT.sub(' ', semantics)
     if confidence < .6 or not _GLOBAL_RULE.search(semantics):
         return False
     explicit_response = bool(_RESPONSE_SCOPE.search(semantics))
@@ -1003,8 +1017,10 @@ def _global_response_rule(value: str, confidence: float = 1.0) -> bool:
     outer_response_scope = bool(re.match(r"\s*for\s+(?:all|every|each)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", semantics, re.I))
     domain_text = re.sub(r"\b(?:for|in)\s+(?:all|every|each|your|future|subsequent)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", " ", semantics, flags=re.I)
     embedded_condition = bool(re.search(r"[,;]\s*(?:if|when|whenever)\b|(?:针对|用于)", domain_text, re.I))
+    response_domain = bool(_RESPONSE_DOMAIN.search(domain_text)
+                           or _REQUEST_SCOPED_CONDITION.search(domain_text))
     local_domain = bool(_LOCAL_RULE.search(domain_text)) and not explicit_response
-    return (not conditional_rule and not embedded_condition
+    return (not conditional_rule and not embedded_condition and not response_domain
             and (not local_prefix or outer_response_scope) and not local_domain
             and (explicit_response or bool(_OUTPUT_POLICY.search(semantics))))
 
@@ -1956,6 +1972,14 @@ def _pack_context(
             if rank < len(queue):
                 source_order.append(queue[rank])
     source_queues = [spread(sources[source]) for source in source_order]
+    repetitions = Counter(unit['text'] for unit in units) if scope == 'global' else None
+    if repetitions is not None:
+        # Select a source's distinctive literal evidence before its repeated
+        # framing. Sorting only after interleaving otherwise gives every
+        # administrative opening a turn before a buried source statement.
+        # Equal wording remains separate observations; this is scheduling only.
+        for queue in source_queues:
+            queue.sort(key=lambda index: repetitions[units[index]['text']])
     priority = []
     for rank in range(max(map(len, source_queues), default=0)):
         for queue in source_queues:
@@ -1980,7 +2004,6 @@ def _pack_context(
         # statement buried in a later turn is visited. This changes scheduling
         # only: equal wordings remain separate observations and keep their RIDs.
         # Stable sorting preserves the existing fair/salient order on ties.
-        repetitions = Counter(unit['text'] for unit in units)
         priority.sort(key=lambda index: repetitions[units[index]['text']])
     # A bounded prefix also needs cross-source coverage. Render a sampled
     # global view in the same fair source order used to select it, rather than
@@ -1988,6 +2011,7 @@ def _pack_context(
     # numbers remain explicit for consumers that need the original chronology.
     if scope == 'global':
         presentation_order = sorted(required) + priority
+
 
     # Measure actual rendered sizes. A binary bounded prefix avoids the old
     # repeated .90 resampling, which could leave half the budget unused. Exact

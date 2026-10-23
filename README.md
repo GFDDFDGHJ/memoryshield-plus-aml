@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **v3.9.0**. Repository:
+Candidate version: **v3.10.0**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -44,6 +44,12 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
   context schedules less-repeated literal sentences before repeated background,
   without merging observations. One original instance of each applicable global
   response policy is protected before optional context; every source RID remains.
+- Bounded global summaries visit less-repeated sentences within each source
+  before round-robin sampling across sources. Complete short views keep their
+  original order; continuations still preserve all selected source segments.
+- A response policy qualified by a topic or a request condition remains local,
+  including when that qualifier follows the response noun. Output language,
+  format and length alone do not create a topic restriction.
 - Source-local qualification links preserve explicit approval outcomes,
   withdrawals, replacements and partial exemptions alongside their anchors.
   Links select original sentences and never execute rules or assert a new state.
@@ -95,6 +101,13 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
   background across sessions. These bounded, single-hop links retain source
   role, units, conditions and revocations, with literal quote ranges. They do
   not infer applicability, resolve versions or merge people by a shared name.
+  An excerpted source already near the head can receive missing identifier
+  background in the same result, retaining its score and source identity.
+  Such supplementary spans do not represent additional observations.
+- Explicit exclusions recognize labelled personal names and nicknames in
+  addition to the existing sensitive fields. Technical file/column/project
+  names stay eligible, and questions about earlier omissions remain questions.
+  This field grammar does not perform free-text person-name anonymization.
 - Applicable global execution constraints accompany rule requests; topic-specific
   business rules stay scoped. Explicit single-property personal queries use
   positive source assertions to limit context; unknown formulations retain

@@ -11,6 +11,7 @@ import re
 
 
 _FIELDS = {
+    'name': r'(?:(?:personal|full|legal|registered|real)\s+)?(?:names?|nicknames?|surnames?)\b|姓名|名字|昵称',
     'address': r'(?:(?:home|postal|street|residential|private|personal)\s+)?address(?:es)?\b|家庭住址|家庭地址|居住地址|通讯地址|通信地址|私人住址|住址|地址',
     'access_code': r'(?:(?:access|door|entry|cabinet|storage|locker|security)\s+codes?|passcodes?|passwords?|credentials?|PINs?|API\s+keys?)\b|门禁密码|访问密码|访问码|门禁码|验证码|密码|口令|密钥',
     'phone': r'(?:(?:phone|telephone|mobile|cell)\s+(?:numbers?|contacts?))\b|电话号码|手机号码|手机号|私人电话|联系电话',
@@ -32,12 +33,19 @@ _EXCLUSION_START = re.compile(
 )
 _JOIN = re.compile(r'\s*(?:,\s*(?:(?:and|or|nor)\s+)?|\s+(?:and|or|nor)\s+|以及|还有|[、及和或与])\s*', re.I)
 _QUOTED = re.compile(r'"[^"\n]*"|“[^”\n]*”|(?<!\w)\x27[^\x27\n]+\x27(?!\w)')
+_ACTION_INQUIRY = re.compile(
+    r'\b(?:did|do|does)\s+(?:you|we|I|he|she|they)\s+'
+    r'(?:(?:ever|already|previously|usually|normally|really|actually)\s+)*'
+    r'(?:ask(?:\s+you)?\s+to\s+)?$'
+    r'|(?:你|我|我们|你们|他|她)(?:之前|以前|曾经|刚才|上次|过去)?(?:是否|有没有|有无|是不是|有没)$', re.I)
 
 
 def _separate_exclusions(query: str):
     quotes = [(match.start(), match.end()) for match in _QUOTED.finditer(query)]
     spans, categories = [], []
     for start in _EXCLUSION_START.finditer(query):
+        if _ACTION_INQUIRY.search(query[:start.start()]):
+            continue
         if any(left <= start.start() < right for left, right in quotes):
             continue
         if any(span['start'] <= start.start() < span['end'] for span in spans):
@@ -178,6 +186,13 @@ def plan(query: str) -> dict:
 _ASSIGN = r'\s*(?:(?:is|are|was|were|equals?|number\s+is)\b|[:=]|(?:是|为|如下|号码为|号码是))\s*(?P<value>[^\n;。；]+)'
 _NON_VALUE = re.compile(r'^(?:not|unknown|unavailable|redacted|missing|unchanged|withheld|null|none|required|mandatory|optional|prohibited|forbidden|protected|confidential)\b|^(?:未提供|已隐藏|已删除|未更新|没有更新|不需要|未知|不可用|保密|未披露|需要更新|应当更新|必须更新|必填)', re.I)
 _SENSITIVE_ANCHORS = {
+    'name': (r'\b(?:my|our|his|her|their|your|the\s+user[\x27\u2019]s)\s+'
+             r'(?:(?:full|legal|registered|personal|real)\s+)*(?:name|nickname|surname)\b'
+             r'|\b(?:full|legal|registered|personal|real)\s+name\b'
+             r'|(?:^|\n)\s*(?:name|nickname|surname)\b'
+             r'|\bself\s*[/\.]\s*(?:name|nickname)\b'
+             r'|(?:我的|我们的|他的|她的|他们的|你的)?(?:登记|注册|法定|真实)?(?:姓名|昵称)'
+             r'|(?:我的|我们的|他的|她的|你的)(?:登记|真实)?名字'),
     'address': r'(?:(?:home|postal|street|residential|private|personal)\s+)?address(?:es)?|家庭住址|家庭地址|居住地址|通讯地址|通信地址|住址|地址',
     'access_code': r'(?:(?:access|door|entry|cabinet|storage|locker|security)\s+codes?|passcodes?|passwords?|credentials?|PINs?|API\s+keys?)|门禁密码|访问密码|访问码|门禁码|验证码|密码|口令|密钥',
     'phone': r'(?:phone|telephone|mobile|cell)(?:\s+number)?|电话号码|手机号码|手机号|联系电话',
@@ -186,6 +201,13 @@ _SENSITIVE_ANCHORS = {
     'financial': r'bank\s+account(?:\s+number)?|credit\s+card(?:\s+number)?|salary|income|银行账号|银行账户|银行卡号|信用卡号|工资|薪资|收入',
     'identity': r'passport\s+number|(?:government|national|tax|social\s+security)\s+(?:ID|identification|number)|ID\s+number|身份证号|身份证号码|护照号码|护照号|证件号码|证件号',
 }
+
+
+def _technical_name_position(text: str, position: int) -> bool:
+    return bool(re.search(
+        r'\b(?:column|field|variable|file|folder|project|dataset|schema)(?:[\x27\u2019]s)?\s+'
+        r'(?:(?:full|legal|registered|personal|real)\s+)*$'
+        r'|(?:字段|列|变量|文件|文件夹|项目|数据集)(?:的)?$', text[max(0,position-80):position], re.I))
 
 
 def excluded_text(text: str, categories) -> bool:
@@ -206,10 +228,23 @@ def excluded_text(text: str, categories) -> bool:
         if anchor:
             for match in re.finditer(r'(?:'+anchor+r')'+_ASSIGN, text, re.I):
                 value = match.group('value').strip().strip(' .!?:')
+                if category == 'name' and _technical_name_position(text, match.start()):
+                    continue
                 if category == 'address' and re.search(r'\b(?:IP|MAC|network|server|memory|email|web)\s+$', text[:match.start()], re.I):
                     continue
                 if value and not _NON_VALUE.search(value):
                     return True
+            if category == 'name':
+                # An explicitly labelled proper name can precede a later
+                # withdrawal without an assignment verb. This still quotes
+                # an identifier; generic privacy rules contain no such value.
+                for match in re.finditer(anchor, text, re.I):
+                    if _technical_name_position(text, match.start()):
+                        continue
+                    proper = re.match(r'\s+([A-Z][A-Za-z\x27\u2019-]{1,50})(?=\s|[,.;!?]|$)',text[match.end():])
+                    if (proper and proper[1].casefold() not in {'is','are','was','were','has','have','had','must','should','never'}
+                            and not _NON_VALUE.search(proper[1])):
+                        return True
     if 'email' in requested and re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', text):
         return True
     if 'address' in requested and re.search(r'\b\d{1,6}\s+(?:[A-Za-z][A-Za-z\x27-]*\s+){1,5}(?:Street|St|Road|Rd|Lane|Ln|Avenue|Ave|Drive|Dr|Boulevard|Blvd)\b|(?:路|街|巷)\d{1,5}号', text, re.I):

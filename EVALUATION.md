@@ -16,6 +16,58 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## v3.10.0: bounded synthesis and rule scope
+
+This medium update retains the same models, routes, credentials, storage schema
+and complete-source records. Its controls use only invented data, temporary
+databases and unchanged cached model orders; no official raw task data was used.
+
+- Global bounded context now orders each source's sentence queue by exact
+  wording frequency before interleaving sources and sessions. A repeated
+  document preamble can no longer postpone that source's uncommon body
+  statement behind every other source's unique title. Required policies,
+  validity conditions and schemas still take precedence. No new salience
+  verbs or query triggers are introduced, genuine source RIDs are not merged,
+  and the complete-view fast path is unchanged.
+- Rules qualified after the response noun by `about/to/for` a topic, or by
+  a request-trigger condition, are no longer elevated to global response
+  policy. Language, output format and length controls remain global when
+  independently unqualified. Topic-matching retrieval still retains the
+  original local instruction with its source.
+- Identifier linking can supplement the first four raw sources when their
+  returned bodies are already excerpts. Missing safe background spans are
+  appended to that same result, with original character ranges and source
+  identity; score and role do not change. Existing visible literal spans are
+  not appended again. The supplement explicitly is not a new observation;
+  it is not a claim to reconstruct complete repeated-source statistics.
+- Explicit personal-name/nickname exclusions apply to labelled source and
+  derived fact/profile fields. Technical possessive names remain eligible.
+  A past/habitual question about omission does not execute that omission.
+  Ordinary and quoted name queries retain their original interpretation.
+  Unlabelled free-form person mentions remain outside this narrow field grammar.
+
+In the unchanged multi-domain progression fixture, the embedded global history
+improves from 5/30 to 22/30 necessary literal claims at 8k and from 5/30 to
+30/30 at 16k. Complete return remains 30/30; standalone and narrow-topic
+controls retain their previous coverage. Independent fixtures cover buried
+statements, the short sentence `I quit.`, 241 repeated observations with
+distinct pointers, policy/schema/validity priority and privacy boundaries.
+Unrecognized global-synthesis formulations remain disclosed failures; this
+measures evidence visibility rather than summary-answer quality.
+
+The fixed long-source diagnostic with cached real qwen3-rerank orders improves
+from 5/6 to 6/6 complete evidence contracts. A separate new explicit-protocol
+case restores four necessary unit/conversion/eligibility clauses when its
+source is an excerpted head candidate; complete short seeds, private fields,
+source role and TopK1 have negative controls. No new paid ranks were required.
+
+Both real-v4 seeds of the unchanged 47-case evaluator retain all prior
+required evidence, role, source-fidelity and rank checks: 42/47 strict,
+291/306 required literals at 8k and 306/306 at 16k. Extended-context,
+state-evidence and table contracts remain 8/8, 12/12 and 9/9 respectively.
+Thirty isolated offline scripts pass; live availability is checked separately.
+These local counts do not estimate an official Smoke or Full score.
+
 ## v3.9.0: late arrivals, execution evidence and explicit tables
 
 This is a medium update from v3.8.0 (previously labelled v3.8 / rc8). The

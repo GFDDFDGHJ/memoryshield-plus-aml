@@ -803,9 +803,36 @@ class MemoryStore:
         linked = []
         if link_rows and raw:
             seeds = {row["source_rid"] for row in raw[:4] if row.get("source_rid") is not None}
+            excerpted_seeds = {row["source_rid"]:row for row in raw[:4]
+                               if row.get("source_rid") is not None and row.get("excerpt")}
             related = link_layer.select_linked_sources(
-                link_rows, query, seeds, max_sources=min(8,top_k-1), max_chars=10000)
+                link_rows, query, seeds, max_sources=min(8,top_k-1), max_chars=10000,
+                include_seed_rids=excerpted_seeds)
             for row in related:
+                if row.get('seed_background'):
+                    # A source may be semantically relevant while its query
+                    # preview omits a distant unit definition or restriction.
+                    # Add only safe, still missing literal background to the
+                    # existing source view, preserving its identity and rank.
+                    view = excerpted_seeds.get(row['source_rid'])
+                    if view is None:
+                        continue
+                    visible = view['content']
+                    missing, ranges = [], []
+                    for start, end in row['quote_spans']:
+                        literal = row['content'][start:end]
+                        if literal and literal not in visible:
+                            missing.append(literal)
+                            ranges.append([start,end])
+                            visible += '\n' + literal
+                    if missing:
+                        view['content'] += (
+                            '\n[SAME-SOURCE EXPLICIT-ID BACKGROUND; excerpts from this source, '
+                            'not additional observations]\n' + '\n'.join(missing))
+                        view['same_source_background'] = True
+                        view['background_source_char_ranges'] = ranges
+                        view['evidence_links'] = row['evidence_links']
+                    continue
                 quote = row["quote"]
                 label = fact_layer._source_label(row)
                 evidence = self._structured_evidence("linked", user_id,
