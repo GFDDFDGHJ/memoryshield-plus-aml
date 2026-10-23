@@ -38,7 +38,10 @@ Changes select and schedule original evidence rather than producing answers:
   not evaluate a condition, assign truth or create an updated fact. Links are
   bounded to 24 added sentences, 512 sentence positions and four following
   qualification sentences. Different entities, private fields and hypothetical
-  updates have independent negative controls.
+  updates have independent negative controls. Reference resolution retains the
+  original sentence indexes and hidden scope boundaries before privacy
+  filtering; a second preview cannot reconnect scopes across an excluded
+  field. Ambiguous repeated-sentence mappings add no new dependencies.
 - Long ranking copies use bounded query-focused literal windows instead of
   an indiscriminate prefix. Wire payloads remain within 3,500 UTF-8 bytes per
   document and the existing weighted request ceiling. Returned evidence and

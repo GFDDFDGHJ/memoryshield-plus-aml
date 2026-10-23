@@ -1,4 +1,4 @@
-"""Independent invented source-local dependency controls; no models or DB."""
+"""Invented dependency controls; full Search uses only guarded temporary DBs."""
 from __future__ import annotations
 
 import copy
@@ -153,6 +153,141 @@ class SourceDependencyTests(unittest.TestCase):
             "A one-use exemption removes only the handling surcharge.",
             "My bank account was approved: PRIVATE-BANK-772.",
             "This dispensation lapses if the certificate is missing."], {0}), {1})
+
+
+class PrivacyBoundaryIntegrationTests(unittest.TestCase):
+    def test_filtered_qualifier_does_not_jump_original_medical_scope(self):
+        from test_rerank_store import S
+        content = ("Product Elara material selection is approved. "
+                   "My medical record was approved. "
+                   "However, that approval has been withdrawn.")
+        row = dict(rid=1, user_id="synthetic", session_id="one", role="user", seq=1,
+                   content=content, created_at=1735689600, timestamp_origin="message.timestamp")
+        query = "Summarize the material selection for Product Elara; omit my medical records."
+        units = S.fact_layer.context_units_for_query([row], query)
+        self.assertEqual([(unit["segment"], unit["text"]) for unit in units],
+                         [(0, "Product Elara material selection is approved.")])
+
+    def test_filtered_preview_keeps_hidden_original_adjacency_barrier(self):
+        from test_rerank_store import S
+        anchor = "Product Elara material selection is approved."
+        private = "My medical record was approved."
+        pointer = "However, that approval has been withdrawn."
+        routine = "Routine cardboard notes describe bins and folding chairs. "
+        original = anchor + " " + private + " " + pointer + " " + routine * 50
+        filtered = anchor + " " + pointer + " " + routine * 50
+        preview = S._query_preview(filtered, "Elara material selection", budget=700, source_text=original)
+        self.assertIn(anchor, preview)
+        self.assertNotIn(pointer, preview,
+            "A cue adjacent only after filtering must not bind across a hidden original scope.")
+        self.assertNotIn(private, preview)
+
+    def test_ambiguous_duplicate_filtered_anchor_cannot_choose_first_source_occurrence(self):
+        from test_rerank_store import S
+        from unittest.mock import patch
+        repeated = "The release authorization remains effective."
+        old_outcome = "The permission cited above has been revoked."
+        scope = "Product Rowan has a separate authorization arrangement."
+        later_outcome = "However, the permission cited above has been withdrawn."
+        routine = "Routine cardboard notes describe bins and folding chairs. "
+        original = " ".join((repeated, old_outcome, scope, repeated, later_outcome, routine * 50))
+        # Only the later identical anchor survived. Text alone cannot prove
+        # which occurrence it came from, so no dependency traversal may guess.
+        filtered = " ".join((repeated, later_outcome, routine * 50))
+        with patch.object(S.dependency_layer, "dependency_indexes", wraps=D.dependency_indexes) as lookup:
+            preview = S._query_preview(filtered, "release authorization", budget=700, source_text=original)
+        lookup.assert_not_called()
+        self.assertIn(repeated, preview)
+        self.assertNotIn(later_outcome, preview)
+        self.assertNotIn(old_outcome, preview)
+
+    def test_exclusion_keeps_original_scope_barrier_during_full_search(self):
+        """Removing a private sentence must not rebind its later pointer."""
+        import builtins
+        from contextlib import ExitStack
+        from dataclasses import replace
+        import importlib
+        import os
+        from pathlib import Path
+        import socket
+        import sqlite3
+        import tempfile
+        from unittest.mock import patch
+
+        original_open, original_connect = builtins.open, sqlite3.connect
+        with tempfile.TemporaryDirectory(prefix="aml-private-scope-regression-") as directory:
+            temporary = Path(directory).resolve()
+
+            def safe_open(file, *args, **kwargs):
+                if isinstance(file, (str, bytes, os.PathLike)) and any(
+                    part.casefold() == ".secrets" for part in Path(os.fsdecode(file)).parts
+                ):
+                    raise FileNotFoundError("secret access disabled in synthetic regression")
+                return original_open(file, *args, **kwargs)
+
+            def safe_connect(database, *args, **kwargs):
+                if str(database) != ":memory:" and not Path(database).resolve().is_relative_to(temporary):
+                    raise RuntimeError("database outside synthetic temporary directory")
+                return original_connect(database, *args, **kwargs)
+
+            def no_network(*args, **kwargs):
+                raise RuntimeError("network disabled in synthetic regression")
+
+            environment = dict(
+                AML_DB_PATH=str(temporary / "memory.db"), EMBEDDING_API_KEY="offline-fake",
+                AML_AUTH_TOKEN="offline-fake", EMBEDDING_DIM="4", EMBEDDING_MODEL="offline",
+                EMBEDDING_MODE="standard", EMBEDDING_BASE_URL="https://offline.invalid/v1",
+                AML_GOVERNANCE="false", AML_QUARANTINE="false", AML_RERANK="false",
+            )
+            with ExitStack() as guards:
+                guards.enter_context(patch.dict(os.environ, environment))
+                guards.enter_context(patch("builtins.open", safe_open))
+                guards.enter_context(patch("sqlite3.connect", safe_connect))
+                guards.enter_context(patch("socket.create_connection", no_network))
+                guards.enter_context(patch.object(socket.socket, "connect", no_network))
+                guards.enter_context(patch.object(socket.socket, "connect_ex", no_network))
+                S = importlib.import_module("store")
+                guards.enter_context(patch.object(S, "CONFIG", replace(
+                    S.CONFIG, db_path=str(temporary / "memory.db"), embedding_dim=4,
+                    embedding_api_key="offline-fake", governance_enabled=False, quarantine_enabled=False,
+                    rerank_enabled=False,
+                )))
+
+                class Offline(S.MemoryStore):
+                    def __init__(self):
+                        self._dim = 4
+                        self.connections = []
+                        self._ensure_schema()
+
+                    def _connect(self):
+                        connection = super()._connect()
+                        self.connections.append(connection)
+                        return connection
+
+                    def embed(self, texts):
+                        return [[1., 0., 0., 0.] for _ in texts]
+
+                memory = Offline()
+                try:
+                    anchor = "For Pelican Edge, release authorization remains effective."
+                    private = "My bank account was approved: PRIVATE-BANK-772."
+                    pointer = "The permission cited above has been rescinded."
+                    routine = "Routine cardboard notes describe inventory shelves and folding chairs. "
+                    content = anchor + " " + private + " " + routine * 80 + pointer
+                    query = "Summarize the Pelican Edge release authorization without financial details."
+                    memory.add_messages("synthetic-scope", "one-source", [dict(
+                        role="user", content=content, timestamp=1750000000000,
+                    )])
+                    rows = memory.search("synthetic-scope", query, 100)
+                    visible = "\n".join(row["content"] for row in rows)
+                    self.assertIn(anchor, visible)
+                    self.assertNotIn("PRIVATE-BANK-772", visible)
+                    self.assertNotIn(pointer, visible,
+                        "A private field remains a scope barrier even when its value is omitted; "
+                        "its generic revocation must not become the technical authorization's outcome.")
+                finally:
+                    for connection in memory.connections:
+                        connection.close()
 
 
 if __name__ == "__main__":

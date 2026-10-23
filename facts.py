@@ -1529,6 +1529,7 @@ def _procedure_dependency_indexes(units: list[dict], kept: set[int]) -> set[int]
         following = index + 1
         while (following < len(units)
                and units[following]['source_rid'] == units[index]['source_rid']
+               and units[following]['segment'] == units[following-1]['segment'] + 1
                and _CONTEXT_QUALIFIER.search(units[following]['text'].strip())):
             dependencies.add(following)
             following += 1
@@ -2002,7 +2003,9 @@ def _schema_block_closure(units: list[dict], kept: set[int]) -> set[int]:
                     expanded.add(index)
                     units[index]['context_qualification']=True
                     following=index+1
-                    while following<len(units) and units[following]['source_rid']==units[index]['source_rid'] and _CONTEXT_QUALIFIER.search(units[following]['text'].strip()):
+                    while (following<len(units) and units[following]['source_rid']==units[index]['source_rid']
+                           and units[following]['segment']==units[following-1]['segment']+1
+                           and _CONTEXT_QUALIFIER.search(units[following]['text'].strip())):
                         expanded.add(following)
                         units[following]['context_qualification']=True
                         following+=1
@@ -2087,6 +2090,7 @@ def context_units_for_query(rows, query: str) -> list[dict]:
                     adjacent=index+direction
                     while (0 <= adjacent < len(units)
                            and units[adjacent]["source_rid"] == units[index]["source_rid"]
+                           and units[adjacent]['segment'] == units[adjacent-direction]['segment'] + direction
                            and _CONTEXT_QUALIFIER.search(units[adjacent]["text"].strip())):
                         kept.add(adjacent)
                         adjacent += direction
@@ -2096,15 +2100,21 @@ def context_units_for_query(rows, query: str) -> list[dict]:
             source_rows={unit["source_rid"]:[] for unit in units}
             for index,unit in enumerate(units): source_rows[unit["source_rid"]].append(index)
             for indexes in source_rows.values():
-                local_anchors = {offset for offset, index in enumerate(indexes) if index in kept}
+                local_anchors = {units[index]['segment'] for index in indexes if index in kept}
                 if local_anchors:
+                    # Hidden sentences still delimit the original scope. Do
+                    # not reconnect two permissions by deleting a private
+                    # intervening subject before resolving their references.
                     dependencies = dependency_layer.dependency_indexes(
-                        [units[index]['text'] for index in indexes], local_anchors)
-                    kept.update(indexes[offset] for offset in dependencies)
+                        _source_sentences(str(units[indexes[0]]['content'])), local_anchors)
+                    kept.update(index for index in indexes if units[index]['segment'] in dependencies)
             table_row=lambda text: bool(re.search(r"[|\t]|[,;].*[,;]",text))
             for indexes in source_rows.values():
                 runs,run=[],[]
                 for index in indexes:
+                    if run and units[index]['segment'] != units[run[-1]]['segment'] + 1:
+                        runs.append(run)
+                        run=[]
                     if table_row(units[index]["text"]):
                         run.append(index)
                     else:
@@ -2129,7 +2139,8 @@ def context_units_for_query(rows, query: str) -> list[dict]:
             neighbors = set(matches)
             for index in matches:
                 for adjacent in (index - 1, index + 1):
-                    if 0 <= adjacent < len(units) and units[adjacent]["source_rid"] == units[index]["source_rid"]:
+                    if (0 <= adjacent < len(units) and units[adjacent]["source_rid"] == units[index]["source_rid"]
+                            and abs(units[adjacent]['segment'] - units[index]['segment']) == 1):
                         neighbors.add(adjacent)
             units = [unit for index, unit in enumerate(units) if index in neighbors]
     return units

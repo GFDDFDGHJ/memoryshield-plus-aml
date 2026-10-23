@@ -28,6 +28,7 @@ import re
 import sqlite3
 import time
 import unicodedata
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -235,7 +236,7 @@ def _excerpt(text: str, query: str, head: int = 320, window: int = 520) -> str:
     return opening + " … " + chunk.strip()
 
 
-def _query_preview(text: str, query: str, budget: int = 3000) -> str:
+def _query_preview(text: str, query: str, budget: int = 3000, *, source_text: str | None = None) -> str:
     """Show complementary literal windows; keep the original turn in storage.
 
     Greedy token coverage prevents one repeated topic sentence from using all
@@ -246,15 +247,46 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
         return text
     tokens = fact_layer._tokens(query)
     spans = []
-    units = []
     # Keep literal table delimiters: whitespace normalization would erase TSV
     # column boundaries before a matched numeric row can recover its schema.
-    for line in text.splitlines():
-        if len(line) <= 500 and any(line.count(delimiter) >= 2 for delimiter in ("|", "\t", ",")):
-            if line.strip():
-                units.append(line.strip())
-        else:
-            units.extend(fact_layer._source_sentences(line))
+    def split_units(value):
+        result = []
+        for line in value.splitlines():
+            if len(line) <= 500 and any(line.count(delimiter) >= 2 for delimiter in ("|", "\t", ",")):
+                if line.strip():
+                    result.append(line.strip())
+            else:
+                result.extend(fact_layer._source_sentences(line))
+        return result
+    units = split_units(text)
+    original_units = split_units(source_text) if source_text is not None else units
+    # A second preview may receive already filtered excerpts. Resolve links
+    # against the whole source, including hidden scope boundaries; output can
+    # only contain units that survived the caller's filtering.
+    original_to_local = {}
+    next_original = 0
+    original_counts, local_counts = Counter(original_units), Counter(units)
+    ambiguous = any(original_counts[part] > count for part, count in local_counts.items()
+                    if original_counts[part] > 1)
+    for local, part in enumerate(units):
+        if ambiguous:
+            break
+        match = next((index for index in range(next_original, len(original_units))
+                      if original_units[index] == part), None)
+        if match is None:
+            original_to_local.clear()
+            break
+        original_to_local[match] = local
+        next_original = match + 1
+    local_to_original = {local: original for original, local in original_to_local.items()}
+    def source_adjacent(left, right):
+        return (left in local_to_original and right in local_to_original
+                and local_to_original[right] == local_to_original[left] + 1)
+    def dependencies_for(anchor):
+        if anchor not in local_to_original:
+            return set()
+        dependencies = dependency_layer.dependency_indexes(original_units, {local_to_original[anchor]})
+        return {original_to_local[index] for index in dependencies if index in original_to_local}
     locations = []
     start = 0
     for unit, part in enumerate(units):
@@ -279,14 +311,14 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
     # the requested variables. Its dependent exception chain must still pass
     # the same all-or-disclosed-omission check as any other matching source.
     opening = units[0][:min(500, max(0, budget // 5))]
-    if len(units) > 1 and context_cue.search(units[1].strip()):
+    if len(units) > 1 and source_adjacent(0, 1) and context_cue.search(units[1].strip()):
         opening = ""
     selected = [(locations[0], opening, 0)] if opening else []
     covered = tokens & fact_layer._tokens(opening)
     remaining = budget - len(opening) - (35 if opening else 0)
     blocked_chain = False
     if opening:
-        dependencies = dependency_layer.dependency_indexes(units, {0})
+        dependencies = dependencies_for(0)
         needed = sum(len(units[index]) + 35 for index in dependencies)
         if needed <= remaining:
             selected.extend((locations[index], units[index], index) for index in sorted(dependencies))
@@ -305,6 +337,8 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
             if len(cells) < 3 or sum(bool(re.match(r"^[+-]?(?:\d|\.\d)", cell)) for cell in cells) < 2:
                 continue
             for previous in range(unit - 1, -1, -1):
+                if not source_adjacent(previous, previous + 1):
+                    break
                 candidate = units[previous].strip().strip("|")
                 columns = [cell.strip() for cell in candidate.split(delimiter)]
                 if len(columns) != len(cells):
@@ -326,7 +360,8 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
                 if procedure_subject.search(part) and procedure_control.search(part)}
     for index in tuple(protocol):
         following = index + 1
-        while following < len(units) and context_cue.search(units[following].strip()):
+        while (following < len(units) and source_adjacent(following - 1, following)
+               and context_cue.search(units[following].strip())):
             protocol.add(following)
             following += 1
     if protocol:
@@ -357,12 +392,13 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
         if schema is not None and not any(previous[2] == schema for previous in selected):
             context.append((locations[schema], units[schema], schema))
         following = unit + 1
-        while following < len(units) and context_cue.search(units[following].strip()):
+        while (following < len(units) and source_adjacent(following - 1, following)
+               and context_cue.search(units[following].strip())):
             if not any(previous[2] == following for previous in selected):
                 context.append((locations[following], units[following], following))
             following += 1
         existing_context = {index for _, _, index in context} | {index for _, _, index in selected}
-        for index in sorted(dependency_layer.dependency_indexes(units, {unit})):
+        for index in sorted(dependencies_for(unit)):
             if index not in existing_context:
                 context.append((locations[index], units[index], index))
         needed = len(piece) + 35 + sum(len(line) + 35 for _, line, _ in context)
@@ -1249,7 +1285,7 @@ class MemoryStore:
             excerpted = long_content or content != row["content"]
             source_chars = len(row["content"])
             if long_content:
-                content = _query_preview(content, query)
+                content = _query_preview(content, query, source_text=row['content'])
             if excerpted:
                 content = (
                     "[QUERY-FOCUSED SOURCE EXCERPTS; additional source text omitted; "
