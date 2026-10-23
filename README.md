@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **v3.11.1**. Repository:
+Candidate version: **v3.12.0**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -51,6 +51,10 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
 - Bounded global summaries visit less-repeated sentences within each source
   before round-robin sampling across sources. Complete short views keep their
   original order; continuations still preserve all selected source segments.
+- When literal context exceeds its budget, identical whole records can share
+  one literal template while keeping a separate metadata row for every source
+  occurrence. Distinct RIDs and repeated observations are retained; a summary
+  must not count the shared wording as a single observation.
 - A response policy qualified by a topic or a request condition remains local,
   including when that qualifier follows the response noun. Output language,
   format and length alone do not create a topic restriction.
@@ -75,6 +79,14 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
   and assistant assertions update their own role's history. Existing facts with
   unknown roles are repaired lazily from their original sources for the current
   user's affected attribute; genuine retractions remain retracted.
+- Natural-language fact mining checks the local assertion context. Questions,
+  reported quotations, hypothetical statements and explicitly historical
+  descriptions remain original evidence without retiring a current value.
+  A genuine later correction in the same message can still update that value.
+- Physical-line numbered steps retain their ordinal with their text. A bounded
+  consecutive operational list can accompany a matching step with its heading
+  and execution controls, using original source character intervals. New
+  headings, filtered gaps, numbering gaps and size limits stop expansion.
 - Single-valued facts with comparable provided message timestamps replay in
   source-time order when a new assertion arrives late. Mixed/unknown timestamp
   origins keep source order. Reassertions keep their own source pointers.

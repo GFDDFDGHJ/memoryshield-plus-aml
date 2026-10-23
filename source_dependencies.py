@@ -18,6 +18,40 @@ MAX_DEPENDENCIES = 24
 MAX_DISTANCE = 512
 MAX_CHAIN = 4
 
+# Keep this tokenizer source-only. In particular, a terminal number in an
+# ordinary sentence is not a list marker, and a decimal is not punctuation.
+_SOURCE_SENTENCES = re.compile(r".+?(?:[。！？!?]|\.(?!\d)(?=\s|$)|\n+|$)", re.S)
+_ORDINAL_FRAGMENT = re.compile(r"\s*(\d{1,3})\.\s*")
+
+
+def source_sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Return literal sentence spans, attaching physical-line list numbers.
+
+    A bare ``1.`` at the start of a line belongs to the following text on
+    that SAME line. This only repairs a tokenizer boundary; it does not
+    classify the numbered text as a rule. Original offsets remain exact.
+    """
+    raw = [(match.start(), match.end()) for match in _SOURCE_SENTENCES.finditer(text)
+           if match.group(0).strip()]
+    result = []
+    at = 0
+    while at < len(raw):
+        start, end = raw[at]
+        marker = _ORDINAL_FRAGMENT.fullmatch(text[start:end])
+        if marker and at + 1 < len(raw):
+            number_start = start + marker.start(1)
+            line_start = text.rfind('\n', 0, number_start) + 1
+            following_start, following_end = raw[at + 1]
+            same_line = re.match(r'[\t ]+\S', text[end:following_end])
+            if (not text[line_start:number_start].strip()
+                    and following_start == end and same_line):
+                result.append((start, following_end))
+                at += 2
+                continue
+        result.append((start, end))
+        at += 1
+    return result
+
 _EXECUTION_SUBJECT = re.compile(
     r"\b(?:rules?|steps?|instructions?|operations?|algorithm|execution|procedure|protocol)\b"
     r"|规则|步骤|指令|操作|算法|执行|流程", re.I)
@@ -45,6 +79,126 @@ def execution_control_indexes(sentences: list[str]) -> set[int]:
     return {index for index, text in enumerate(sentences)
             if _EXECUTION_SUBJECT.search(text) and _EXECUTION_CONTROL.search(text)
             and _ENACTED_CONTROL.search(text)}
+
+
+_NUMBERED_LINE = re.compile(r'^\s*(?P<number>\d{1,3})[.)]\s+(?P<body>\S.*)$')
+_RULE_ACTION = (
+    r'(?:add|subtract|multiply|divide|set|replace|round|truncate|return|stop|skip|'
+    r'repeat|apply|execute|process|use|format|include|omit|keep|write|output|'
+    r'close|open|increment|decrement|remove|insert|append|retain|discard|convert)'
+)
+_ITEM_ACTION = re.compile(r'^' + _RULE_ACTION + r'\b\s+\S', re.I)
+_ITEM_ARITHMETIC = re.compile(
+    r'^(?:add\b.+\bto|subtract\b.+\bfrom|(?:multiply|divide)\b.+\bby|'
+    r'set\b.+\bto|replace\b.+\bwith|round\b.+\b(?:up|down|to))\s+\S', re.I)
+_ITEM_OBJECT = re.compile(
+    r'^' + _RULE_ACTION + r'\s+(?:the|a|an|this|that|these|those|every|each|all|any)\s+\S', re.I)
+
+
+def _operational_item(body: str) -> bool:
+    """Require instruction grammar, not merely a verb-shaped company name."""
+    body = re.sub(r'^(?:then|next|finally)\s*,?\s*', '', body, flags=re.I)
+    conditional = re.match(r'^(?:if|when|unless)\b.{1,400}?[,;:]\s*(?:then\s+)?(.+)', body, re.I)
+    if conditional:
+        return bool(_ITEM_ACTION.match(conditional[1]))
+    explicit = re.match(r'^(?:always|never|do\s+not)\s+(.+)', body, re.I)
+    if explicit:
+        return bool(_ITEM_ACTION.match(explicit[1]))
+    return bool(_ITEM_ARITHMETIC.match(body) or _ITEM_OBJECT.match(body))
+
+
+def _numbered_rule_blocks(text: str) -> list[tuple[int, int]]:
+    """Find bounded contiguous literal procedures; never resolve a source."""
+    spans = source_sentence_spans(text)
+    lines = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        lines.append((offset, offset + len(line), line.rstrip('\r\n')))
+        offset += len(line)
+    blocks = []
+    at = 0
+    while at < len(lines):
+        match = _NUMBERED_LINE.fullmatch(lines[at][2])
+        if not match:
+            at += 1
+            continue
+        first = at
+        number = int(match['number'])
+        bodies = []
+        invalid = False
+        while at < len(lines):
+            current = _NUMBERED_LINE.fullmatch(lines[at][2])
+            if not current:
+                break
+            if int(current['number']) != number or not _operational_item(current['body']):
+                invalid = True
+            bodies.append(current['body'])
+            number += 1
+            at += 1
+            # Indented continuation lines remain literal members of that
+            # item; a blank line is an explicit scope barrier.
+            while (at < len(lines) and lines[at][2].strip()
+                   and lines[at][2][:1] in {' ', '\t'}
+                   and not _NUMBERED_LINE.fullmatch(lines[at][2])):
+                at += 1
+        if invalid or not 2 <= len(bodies) <= MAX_DEPENDENCIES or first == 0:
+            continue
+        heading = lines[first - 1][2].strip()
+        if (not heading or not _EXECUTION_SUBJECT.search(heading)
+                or not (heading.endswith((':', '：')) or execution_control_indexes([heading]))):
+            continue
+        end = at
+        # An immediately following stated execution policy qualifies all
+        # members, even if it contains none of the queried state variables.
+        while end < len(lines) and lines[end][2].strip():
+            if not execution_control_indexes([lines[end][2]]):
+                break
+            end += 1
+        block_start = lines[first - 1][0]
+        block_end = lines[end - 1][1]
+        block = {index for index, (start, finish) in enumerate(spans)
+                 if start < block_end and finish > block_start}
+        # Do not silently turn a large procedure into a partial sequence.
+        if len(block) <= MAX_DEPENDENCIES:
+            blocks.append((block_start, block_end))
+    return blocks
+
+
+def numbered_rule_spans(text: str, anchors: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Return whole literal blocks intersecting original-source anchors.
+
+    Character intervals avoid ambiguity if the caller separately protects
+    table rows or removes private sentences. The caller must quote only
+    allowed original text and must not present a partially omitted block as
+    a complete procedure. No content is rewritten or marked authoritative.
+    """
+    valid = [(start, end) for start, end in anchors
+             if type(start) is int and type(end) is int and 0 <= start < end <= len(text)]
+    if not valid:
+        return []
+    return [(start, end) for start, end in _numbered_rule_blocks(text)
+            if any(anchor_start < end and anchor_end > start for anchor_start, anchor_end in valid)]
+
+
+def numbered_rule_indexes(text: str, anchors: set[int]) -> set[int]:
+    """Quote a bounded, explicit source-local numbered procedure as a block.
+
+    A matching sentence may need earlier steps whose variables differ. The
+    procedure must have an adjacent explicit rule/procedure heading and at
+    least two consecutive numbered operational items. Blank lines, ordinary
+    unindented narration, numbering gaps and more than 24 items end or reject
+    the block. No source is followed, and no rule is executed or made active.
+
+    Indexes refer to ``source_sentence_spans(text)``. Callers must keep source
+    RID, role and order, and apply their existing exclusion and size checks.
+    """
+    spans = source_sentence_spans(text)
+    valid = {index for index in anchors if type(index) is int and 0 <= index < len(spans)}
+    if not valid:
+        return set()
+    blocks = numbered_rule_spans(text, [spans[index] for index in valid])
+    return {index for index, (start, end) in enumerate(spans) if index not in valid
+            and any(start < block_end and end > block_start for block_start, block_end in blocks)}
 
 _WORDS = re.compile(r"[A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]{2,}")
 _GOVERNANCE = re.compile(

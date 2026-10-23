@@ -16,6 +16,60 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## v3.12.0: assertion context, numbered procedures and repeated source encoding
+
+This medium update preserves the existing models, public Add/Search routes,
+storage schema and source records. Development uses invented data and temporary
+databases; no official raw task messages, questions or answers are inspected.
+
+- Natural-language fact and preference mining now checks the local clause and
+  quotation containing the match. Questions, reported quotations, hypothetical
+  statements and explicitly historical descriptions do not retire a current
+  assertion merely because they contain its first-person grammar. A later real
+  assertion or correction in the same source remains independently eligible.
+  Explicit structured triples retain their prior input semantics. This is a
+  conservative attribution guard, not general truth or event-time inference.
+  The final fixed fixture correctly rejects 1/31 versus 31/31 nonassertions,
+  while retaining all 13 genuine assertion/correction controls in both versions.
+  Original text remains available for retrieval. An explicit Actually/Correction
+  update can retain a past-event date phrase without being mistaken for a
+  historical aside; question, quotation and used-to guards still apply.
+- Physical-line list ordinals remain attached to their original sentence.
+  A matching step can retain a source-local consecutive operational list,
+  heading and stated execution controls through original character intervals.
+  It requires an explicit procedure heading and at least two valid numbered
+  operational items; numbering gaps, blank lines, ordinary narration, private
+  gaps and more than 24 segments stop whole-block expansion. Preview budgets
+  retain the complete linked block or disclose omitted evidence. The fixed
+  long-source case improves from 1/4 to 4/4 necessary literal inputs without
+  repeating a step. This neither executes rules nor grants source authority.
+- The over-budget compact view can encode at least three whole, identical,
+  nonnumeric records with one zero-slot literal template and separate rows for
+  each source RID, sequence, segment, session, role, timestamp and origin. Only
+  complete single-sentence records with distinct RIDs qualify; fragments and
+  repeated sentences within one record retain their previous representation.
+  No genuine observation is deduplicated. When the normal literal view fits,
+  its representation remains unchanged. Ordinary non-template rows share
+  metadata without opening a separate envelope for each uncommon sentence.
+  An independent decoder reconstructs every occurrence from returned text.
+
+In a fixed 140-record Add/Search fixture (120 repeated background records and
+20 distinct topics), the 8k prefix reconstructs 46 versus 119 source RIDs and
+the 16k prefix 67 versus 140. Both versions retain all 20 topics and all 140
+sources in the complete return, with unchanged role/literal fidelity. Overall
+returned characters increase from 32,849 to 36,648 because complete compressed
+digest coverage leaves room for additional raw evidence. The claim is improved
+bounded evidence coverage, not universally shorter responses or better answers.
+
+All 37 isolated offline scripts pass. Both original 47-case real-v4 cached
+seeds retain every prior required evidence, source, role and rank contract
+without new regression. Extended-context, state, table and long-source checks
+retain 8/8, 12/12, 9/9 and 6/6 complete-evidence contracts. The exact three new
+public capability fixtures also pass against a fresh offline temporary store
+before deployment; live API and TLS checks are recorded separately.
+
+The local evidence counts do not predict an official Smoke or Full score.
+
 ## v3.11.1: complete summary scope and qualified rule/state evidence
 
 This medium update preserves the existing models, storage schema and public

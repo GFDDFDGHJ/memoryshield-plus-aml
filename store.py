@@ -250,16 +250,22 @@ def _query_preview(text: str, query: str, budget: int = 3000, *, source_text: st
     # Keep literal table delimiters: whitespace normalization would erase TSV
     # column boundaries before a matched numeric row can recover its schema.
     def split_units(value):
-        result = []
-        for line in value.splitlines():
+        result, ranges = [], []
+        offset = 0
+        for physical in value.splitlines(keepends=True):
+            line = physical.rstrip('\r\n')
             if len(line) <= 500 and any(line.count(delimiter) >= 2 for delimiter in ("|", "\t", ",")):
                 if line.strip():
                     result.append(line.strip())
+                    ranges.append((offset,offset+len(line)))
             else:
-                result.extend(fact_layer._source_sentences(line))
-        return result
-    units = split_units(text)
-    original_units = split_units(source_text) if source_text is not None else units
+                for start,end in dependency_layer.source_sentence_spans(line):
+                    result.append(re.sub(r"[^\S\t]+", " ", line[start:end]).strip())
+                    ranges.append((offset+start,offset+end))
+            offset += len(physical)
+        return result,ranges
+    units,unit_ranges = split_units(text)
+    original_units,original_ranges = split_units(source_text) if source_text is not None else (units,unit_ranges)
     # A second preview may receive already filtered excerpts. Resolve links
     # against the whole source, including hidden scope boundaries; output can
     # only contain units that survived the caller's filtering.
@@ -286,6 +292,12 @@ def _query_preview(text: str, query: str, budget: int = 3000, *, source_text: st
         if anchor not in local_to_original:
             return set()
         dependencies = dependency_layer.dependency_indexes(original_units, {local_to_original[anchor]})
+        original = source_text if source_text is not None else text
+        for start,end in dependency_layer.numbered_rule_spans(original,[original_ranges[local_to_original[anchor]]]):
+            members={index for index,(left,right) in enumerate(original_ranges) if left < end and right > start}
+            if members <= original_to_local.keys():
+                dependencies.update(members)
+        dependencies.discard(local_to_original[anchor])
         return {original_to_local[index] for index in dependencies if index in original_to_local}
     locations = []
     start = 0

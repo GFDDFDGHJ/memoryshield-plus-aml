@@ -27,6 +27,7 @@ import re
 import state_evidence as state_layer
 import context_data as data_layer
 from collections import Counter
+from bisect import bisect_right
 import evidence_links as link_layer
 import query_plan as query_layer
 import source_dependencies as dependency_layer
@@ -316,6 +317,76 @@ def _slug(text: str, limit: int = 60) -> str:
     return t[:limit]
 
 
+# These guards apply only to mined natural-language assertions. They leave the
+# original source in memory and do not decide whether its claim is true. A
+# quoted/questioned/conditional first-person phrase must not retire a current
+# value merely because it contains the same surface form as an assertion.
+_ASSERTION_QUOTES = re.compile(
+    r'```[\s\S]*?```|`[^`\n]+`|"(?:\\.|[^"\\])*"|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』'
+    r"|(?<![\w])'[^'\n]+'(?![\w])")
+_ASSERTION_BOUNDARY = re.compile(
+    r'[.!?。！？;；\n]|,\s*(?=(?:but|however|actually|in\s+fact)\b)'
+    r'|[，,]\s*(?=(?:但(?:是)?|其实|实际上|更正))', re.I)
+_ASSERTION_REPORT = re.compile(
+    r'\b(?:said|says|say|wrote|writes|asked|asks|claimed|claims|stated|states|'
+    r'reported|reports|pretend\w*|imagine\w*|suppos\w*|assum\w*|dream(?:ed|t)?)\b'
+    r'|(?:他说|她说|他们说|她们说|我说过|我曾说|我曾经说|我问|声称|写道|假装|想象|梦见)', re.I)
+_ASSERTION_NONACTUAL = re.compile(
+    r'\b(?:if|unless|hypothetic\w*|fictional|'
+    r'example|illustration|role[- ]?play|used\s+to|formerly|previously|'
+    r'last\s+(?:year|month|week)|back\s+then)\b'
+    r'|\bI\s+(?:would|could|might|may|will|should|think|guess|suspect|wonder)\b'
+    r'|\b(?:maybe|perhaps)\s*$'
+    r'|\b(?:in|during)\s+(?:the\s+year\s+)?(?:19|20)\d{2}\b'
+    r'|\b(?:not\s+(?:true|correct|accurate)|isn[\x27’]t\s+true|deny\s+that)\b'
+    r'|如果|假如|假设|假想|虚构|例如|比如|角色扮演|去年|前年|以前|曾经|当时|那时|并非事实|并不属实', re.I)
+_ASSERTION_POSTCONDITION = re.compile(
+    r'\b(?:if|unless|provided\s+that|assuming|supposing)\b'
+    r'|如果|假如|除非|只要|前提是|的话', re.I)
+_ASSERTION_PAST_EVENT_SUFFIX = re.compile(
+    r'\b(?:last\s+(?:year|month|week)|back\s+then|at\s+that\s+time)\s*$', re.I)
+_ASSERTION_CORRECTION_PREFIX = re.compile(r'\s*(?:actually|correction)\s*[:,]?\s*', re.I)
+_ASSERTION_QUESTION = re.compile(r'[?？]|(?:吗|呢)\s*[。！!]?\s*$')
+_ASSERTION_HEADER = re.compile(
+    r'^\s*(?:(?:quoted?\s+(?:text|example)|quote|example|fictional\s+example|'
+    r'script|role[- ]?play)|(?:\w+\s+){0,3}(?:said|wrote)|'
+    r'引语|引用|例子|示例|举例|假设|台词|剧本|角色扮演|他说|她说)\s*[:：]\s*$', re.I)
+
+
+def _natural_assertion_context(text: str, pos: int,
+                               quotes: list[tuple[int, int]],
+                               boundaries: list[int]) -> bool:
+    """Conservative local attribution, not whole-message truth inference.
+
+    A later direct correction in the same source is independent of an earlier
+    question or reported quotation. Literal field values in quotes are fine:
+    only a match whose own *start* lies inside a quotation is rejected.
+    Structured triples bypass this gate and preserve their explicit semantics.
+    """
+    quote_index = bisect_right(quotes, (pos, len(text) + 1)) - 1
+    if quote_index >= 0 and pos < quotes[quote_index][1]:
+        return False
+    boundary_index = bisect_right(boundaries, pos)
+    left = boundaries[boundary_index - 1] if boundary_index else 0
+    right = boundaries[boundary_index] if boundary_index < len(boundaries) else len(text)
+    clause = text[left:right]
+    prefix = text[left:pos]
+    # "As I said, I live ..." is a direct reaffirmation, not an embedded
+    # reported claim. Keep this narrow discourse preface out of the report gate.
+    prefix = re.sub(r'^\s*as\s+I\s+(?:said|wrote)\s*,\s*', '', prefix, flags=re.I)
+    if (_ASSERTION_QUESTION.search(clause) or _ASSERTION_REPORT.search(prefix)
+            or _ASSERTION_NONACTUAL.search(prefix)
+            or _ASSERTION_POSTCONDITION.search(text[pos:right])):
+        return False
+    # A quoted/example header can occupy the preceding line without quotation
+    # marks. Do not turn its following demonstration into a self attribute.
+    if left and not prefix.strip():
+        previous = text[:left].rstrip('\r\n').rsplit('\n', 1)[-1]
+        if _ASSERTION_HEADER.fullmatch(previous):
+            return False
+    return True
+
+
 def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
     """Mine (subject, predicate, value) from one message. Pure regex, no I/O.
 
@@ -330,14 +401,35 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
 
     conditionals = [(m, False) for m in _COND_EN.finditer(text)]
     conditionals += [(m, True) for m in _COND_ZH.finditer(text)]
+    quotation_spans = [(m.start(), m.end()) for m in _ASSERTION_QUOTES.finditer(text)]
+    assertion_boundaries = [m.end() for m in _ASSERTION_BOUNDARY.finditer(text)]
+    assertion_context_cache: dict[int, bool] = {}
+
+    def asserted_position(pos: int) -> bool:
+        if pos not in assertion_context_cache:
+            assertion_context_cache[pos] = _natural_assertion_context(
+                text, pos, quotation_spans, assertion_boundaries)
+        return assertion_context_cache[pos]
 
     def inside_conditional(pos: int) -> bool:
         return any(m.start() <= pos < m.end() for m, _ in conditionals)
 
+    def natural_matches(pattern):
+        # A rejected reported clause can greedily include a later direct
+        # assertion of the same form. Resume after its start in that case,
+        # rather than letting the rejected quotation swallow the correction.
+        cursor = 0
+        while match := pattern.search(text, cursor):
+            yield match
+            rejected = inside_conditional(match.start()) or not asserted_position(match.start())
+            cursor = match.start() + 1 if rejected else match.end()
+
     def add(subject: str, predicate: str, value: str, kind: str, conf: float,
-            source_pos: int, operation: str = "assert") -> None:
+            source_pos: int, operation: str = "assert", *, structured: bool = False) -> None:
         if kind != "rule" and inside_conditional(source_pos):
             return  # A hypothetical self-description is not a current fact.
+        if kind != "rule" and not structured and not asserted_position(source_pos):
+            return
         value = _clean(value)
         if not (_rule_ok(value) if kind == "rule" else _ok(value)):
             return
@@ -351,24 +443,25 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
                         source_pos, operation))
 
     # possessive: "my dog's name is Max" / "my boss is Karen"
-    for m in _POSS.finditer(text):
+    for m in natural_matches(_POSS):
         attr, subj_key, value = m.group(1), m.group(2), m.group(3)
         # group(1) is the prefix noun ("dog" in "my dog's name is Max")
         subject = "self" if _slug(attr) in {"", "my"} else _slug(attr)
-        if _affirmative_complement(value):
+        if (_affirmative_complement(value)
+                and not re.search(r'\b(?:was|were)\s*$', text[m.start():m.start(3)], re.I)):
             add(subject, _slug(subj_key), value, "fact", 0.9, m.start())
 
     for rx, (subject, predicate, kind, conf) in _SELF:
-        for m in rx.finditer(text):
+        for m in natural_matches(rx):
             if _affirmative_complement(m.group(1)):
                 add(subject, predicate, m.group(1), kind, conf, m.start())
 
-    for m in _PREF.finditer(text):
+    for m in natural_matches(_PREF):
         add("pref", "like", _slug(m.group(2)), "preference", 0.7, m.start())
-    for m in _DISPREF.finditer(text):
+    for m in natural_matches(_DISPREF):
         obj = m.group(2) or m.group(4)
         add("pref", "dislike", _slug(obj), "preference", 0.75, m.start())
-    for m in _FAVORITE.finditer(text):
+    for m in natural_matches(_FAVORITE):
         add("favorite", _slug(m.group(1)), m.group(2), "preference", 0.85, m.start())
 
     for rx, gated, weak, sys_only in _RULE:
@@ -399,14 +492,23 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
 
     # explicit state changes win over whatever was stored before
     for rx, (subject, predicate) in _CHANGE_EN:
-        for m in rx.finditer(text):
-            if m.groups() and m.group(1) and _affirmative_complement(m.group(1)):
-                add(subject, predicate, m.group(1), "fact", 0.95, m.start())
+        for m in natural_matches(rx):
+            if not (m.groups() and m.group(1) and _affirmative_complement(m.group(1))):
+                continue
+            if _ASSERTION_PAST_EVENT_SUFFIX.search(m.group(1)):
+                boundary = bisect_right(assertion_boundaries, m.start())
+                left = assertion_boundaries[boundary - 1] if boundary else 0
+                if not _ASSERTION_CORRECTION_PREFIX.fullmatch(text[left:m.start()]):
+                    continue
+                # A direct "Actually I moved ... last month" corrects an
+                # existing state. The ordinary attribution gate still rejects
+                # questions, quotations, reports and conditional corrections.
+            add(subject, predicate, m.group(1), "fact", 0.95, m.start())
     for rx, (subject, predicate) in _RETRACT_EN:
-        for m in rx.finditer(text):
+        for m in natural_matches(rx):
             add(subject, predicate, m.group(1), "fact", 0.95, m.start(), "retract")
     for rx, (subject, predicate) in _CHANGE_ZH:
-        for m in rx.finditer(text):
+        for m in natural_matches(rx):
             if m.groups() and m.group(1):
                 add(subject, predicate, m.group(1), "fact", 0.95, m.start())
 
@@ -418,7 +520,7 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
                 add("rule", _slug(body, 60) or "rule", body, "rule", 0.75, m.start())
 
     for rx, (subject, predicate, kind, conf) in _ZH:
-        for m in rx.finditer(text):
+        for m in natural_matches(rx):
             if predicate is None:
                 # (subject, None) entries carry the object in group 1
                 if subject == "favorite":
@@ -431,7 +533,7 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
                 add(subject, predicate, m.group(1), kind, conf, m.start())
 
     for rx, (subject, predicate, kind, conf) in _ZH_HEALTH:
-        for m in rx.finditer(text):
+        for m in natural_matches(rx):
             if predicate == "metric" and len(m.groups()) >= 3:
                 label, num, unit = m.group(1), m.group(2), m.group(3)
                 add("self", _slug(label), (num + " " + unit).strip(), "fact", conf, m.start())
@@ -469,7 +571,7 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
         for m in _CORPUS_ARR.finditer(text):
             subj, pred, val = _slug(m.group(1), 60), _slug(m.group(2), 40), _clean(m.group(3))
             if subj and pred and _ok(val):
-                add(subj, pred, val, "fact", 0.95, m.start())
+                add(subj, pred, val, "fact", 0.95, m.start(), structured=True)
 
     # structured triples (wikidata / mquake). store_facts retires the prior
     # value of the same (subject, predicate) and keeps previous_value, so the
@@ -477,7 +579,7 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
     for m in _CORPUS.finditer(text):
         subj, pred = _slug(m.group(1), 60), _slug(m.group(2), 40)
         if subj and pred:
-            add(subj, pred, m.group(3), "fact", 0.95, m.start())
+            add(subj, pred, m.group(3), "fact", 0.95, m.start(), structured=True)
 
     # Keep the highest-confidence first; cap per message so a long dialogue
     # cannot flood the fact table.
@@ -1003,10 +1105,9 @@ def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items:
     # Keep the original paragraph barriers while normalizing only whitespace
     # in the emitted quotes. A scope heading binds its contiguous rule list,
     # but must not leak across a blank line or unrelated prose.
-    source_matches = [match for match in _SOURCE_SENTENCES.finditer(source["content"])
-                      if match.group(0).strip()]
-    sentences = [re.sub(r"[^\S\t]+", " ", match.group(0)).strip()
-                 for match in source_matches]
+    source_spans = dependency_layer.source_sentence_spans(source["content"])
+    sentences = [re.sub(r"[^\S\t]+", " ", source["content"][start:end]).strip()
+                 for start,end in source_spans]
     matches = [index for index, sentence in enumerate(sentences)
                if needle in sentence.casefold()]
     if len(matches) != 1:
@@ -1014,7 +1115,7 @@ def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items:
     index = matches[0]
     linked = [sentences[index]]
     for previous in range(index - 1, -1, -1):
-        gap = source["content"][source_matches[previous].start():source_matches[previous + 1].start()]
+        gap = source["content"][source_spans[previous][0]:source_spans[previous + 1][0]]
         if re.search(r"\n[\t \r]*\n", gap):
             break
         candidate = sentences[previous]
@@ -1034,7 +1135,7 @@ def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items:
         # only explicit instruction objects or unambiguous operation syntax.
         sequential = action and (_ZH_INSTR.match(action_text) or _RULE_CONTINUATION_ACTION.match(action_text))
         withdrawn = _RULE_WITHDRAWAL.match(sentence)
-        gap = source["content"][source_matches[following - 1].start():source_matches[following].start()]
+        gap = source["content"][source_spans[following - 1][0]:source_spans[following][0]]
         if not exception and (re.search(r"\n[\t \r]*\n", gap) or not (sequential or withdrawn)):
             break
         linked.append(sentence)
@@ -1454,8 +1555,8 @@ _SOURCE_SENTENCES = re.compile(r".+?(?:[。！？!?]|\.(?!\d)(?=\s|$)|\n+|$)", r
 def _source_sentences(text: str) -> list[str]:
     """Extract source wording without splitting numeric decimals into facts."""
     # Tabs can delimit measured columns, so retain them as source structure.
-    return [re.sub(r"[^\S\t]+", " ", match.group(0)).strip()
-            for match in _SOURCE_SENTENCES.finditer(text) if match.group(0).strip()]
+    return [re.sub(r"[^\S\t]+", " ", text[start:end]).strip()
+            for start,end in dependency_layer.source_sentence_spans(text)]
 
 
 def _evidence_quote(text: str, max_chars: int = 900) -> str:
@@ -1789,6 +1890,27 @@ def _procedure_dependency_indexes(units: list[dict], kept: set[int]) -> set[int]
     dependencies = {index for index in dependency_layer.execution_control_indexes(
                         [unit['text'] for unit in units])
                     if units[index]['source_rid'] in sources}
+    source_units = {rid:{} for rid in sources}
+    source_anchors = {rid:set() for rid in sources}
+    for index,unit in enumerate(units):
+        rid = unit['source_rid']
+        if rid in sources:
+            source_units[rid][unit['segment']] = index
+            if index in kept:
+                source_anchors[rid].add(unit['segment'])
+    for rid,local in source_units.items():
+        original = units[next(iter(local.values()))].get('content')
+        if not isinstance(original,str):
+            continue  # Fragment-only callers cannot establish a literal block.
+        spans = dependency_layer.source_sentence_spans(original)
+        anchors = source_anchors[rid]
+        for start,end in dependency_layer.numbered_rule_spans(
+                original,[spans[index] for index in anchors if index < len(spans)]):
+            members={index for index,(left,right) in enumerate(spans) if left < end and right > start}
+            # A private/filtered gap cannot turn an incomplete list into a
+            # complete procedure, or reconnect references across that gap.
+            if members <= local.keys():
+                dependencies.update(local[index] for index in members)
     for index in tuple(dependencies):
         following = index + 1
         while (following < len(units)
@@ -1871,7 +1993,7 @@ def _context_metadata(units: list[dict]):
 
 
 def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list[str]:
-    """Losslessly share repeated numeric wording while retaining each source.
+    """Losslessly share repeated wording while retaining each source.
 
     Literal templates keep signs, precision, conditions and units exactly as
     written. Rows remain separate observations, even for identical values.
@@ -1894,10 +2016,65 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
         template, values = _numeric_template(unit["text"])
         key = (unit["role"], template)
         groups.setdefault(key, []).append((unit, values))
+    # Completely equal nonnumeric wording can also consume a whole prefix.
+    # It is an encoding shared by source occurrences, never deduplication of
+    # those occurrences. Keep uncommon rows together in their ordinary table;
+    # opening one metadata envelope per uncommon sentence would erase the
+    # compression gain and crowd distinctive history out of a bounded prefix.
+    literal_groups = set()
+    for key, members in groups.items():
+        if (len(members) >= 3 and not members[0][1]
+                and all(str(unit.get('content', unit['text'])).strip() == unit['text'] for unit, _ in members)
+                and len({unit['source_rid'] for unit, _ in members}) == len(members)):
+            # This codec addresses repeated whole records. Keep a sentence
+            # selected out of a larger source, repeated segments or fragments
+            # in the existing representation with its within-record position.
+            _, columns, _ = _context_metadata([unit for unit, _ in members])
+            if not any("{"+column+"}" in key[1] for column in columns):
+                literal_groups.add(key)
+    group_members = list(groups.items())
+    if literal_groups:
+        positions = {id(unit): index for index, unit in enumerate(units)}
+        coalesced = {}
+        for key, members in groups.items():
+            compact_group = key in literal_groups or (len(members) >= 3 and members[0][1])
+            if compact_group:
+                coalesced[("template", key)] = (key, members)
+            else:
+                # Qualification-bearing rows precede optional context just as
+                # in the literal layout. Do not absorb them into a later block.
+                for unit, values in members:
+                    protected = bool(unit.get('context_qualification') or unit.get('context_dependency')
+                                     or unit.get('context_schema'))
+                    bucket = ("literal", unit['role'], protected)
+                    if bucket not in coalesced:
+                        coalesced[bucket] = ((unit['role'], None), [])
+                    coalesced[bucket][1].append((unit, values))
+        group_members = list(coalesced.values())
+        for key, members in group_members:
+            if key[1] is None:
+                members.sort(key=lambda member: positions[id(member[0])])
+        # Sharing wording must not turn an early repeated background block
+        # into the consumer's entire prefix. Keep controlling evidence first,
+        # then uncommon wording before ordinary repeated-literal occurrence
+        # rows. Every source occurrence is still present in this encoding.
+        group_members.sort(key=lambda group: (
+            not any(unit.get('context_qualification') or unit.get('context_dependency')
+                    or unit.get('context_schema') for unit, _ in group[1]),
+            group[0] in literal_groups,
+        ))
     pieces = []
-    for (role, template), members in groups.items():
+    for (role, template), members in group_members:
         source,metadata_columns,metadata = _context_metadata([unit for unit,_ in members])
-        if compact_numeric and len(members) >= 3 and members[0][1]:
+        if (role, template) in literal_groups:
+            lines = [source, "Literal source template: " + template,
+                     "Rows below remain separate source occurrences, not one observation; the literal template has no substitution slots. Columns: source_rid@seq/segment"
+                     + "".join(" | "+column for column in metadata_columns)]
+            for unit, _ in members:
+                lines.append(f"{unit['source_rid']}@{unit['seq']}/{unit['segment']}"
+                             + "".join(" | "+value for value in metadata(unit)))
+            pieces.append("\n".join(lines))
+        elif compact_numeric and template is not None and len(members) >= 3 and members[0][1]:
             slots = _numeric_slots(members[0][0]["text"],len(members[0][1]))
             constants = {index: values[0] for index, values in enumerate(zip(*(values for _, values in members)))
                          if len(set(values)) == 1}
