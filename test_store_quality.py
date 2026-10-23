@@ -294,6 +294,54 @@ class StoreQualityTests(unittest.TestCase):
         self.assertNotIn("mem_1", {row["id"] for row in results})
         self.assertIn("mem_2", {row["id"] for row in results})
 
+    def test_personal_excerpt_keeps_example_and_report_attribution_headers(self):
+        for index, header in enumerate(("Example:", "Fictional example:", "The visitor said:")):
+            with self.subTest(header=header):
+                user = f"header-user-{index}"
+                source = header + "\nMy name is Inara.\nActually, my name is Selene."
+                self.add([source], user=user, session="quoted-source")
+                rows = self.raw("What is my name now?", user=user)
+                self.assertEqual(len(rows), 1)
+                literal = raw_literal(rows[0])
+                self.assertIn(header, literal)
+                self.assertIn("My name is Inara.", literal)
+                self.assertIn("Actually, my name is Selene.", literal)
+                self.assertEqual(rows[0]["session_id"], "quoted-source")
+                self.assertEqual(rows[0]["role"], "user")
+
+    def test_personal_excerpt_retains_header_without_intervening_medical_field(self):
+        source = ("My medical record is PRIVATE-OUTSIDE-HEADER.\nThe visitor said:\n"
+                  "My medical record is PRIVATE-INSIDE-HEADER.\nMy name is Inara.")
+        self.add([source])
+        literal = raw_literal(self.raw("What is my name now?")[0])
+        self.assertIn("The visitor said:", literal)
+        self.assertIn("My name is Inara.", literal)
+        self.assertNotIn("PRIVATE-", literal)
+
+    def test_personal_excerpt_keeps_multiline_quote_scope_without_private_fields(self):
+        source = '"\nMy medical record is PRIVATE-QUOTED-DETAIL.\nMy name is Inara.\nMy work is PRIVATE-WORK-DETAIL.\n"'
+        self.add([source])
+        literal = raw_literal(self.raw("What is my name now?")[0])
+        self.assertIn('"\nMy name is Inara.\n"', literal)
+        self.assertNotIn("PRIVATE-", literal)
+
+    def test_personal_excerpt_does_not_attach_header_across_a_blank_line(self):
+        self.add(["Example:\nThe unused example concerns supplies.\n\nMy name is Selene."])
+        literal = raw_literal(self.raw("What is my name now?")[0])
+        self.assertIn("My name is Selene.", literal)
+        self.assertNotIn("Example:", literal)
+
+    def test_personal_excerpt_closes_omitted_quote_before_actual_correction(self):
+        source = ('The visitor said:\n"My name is Inara.\n'
+                  'My medical record is PRIVATE-QUOTED-DETAIL."\n'
+                  'Actually, my name is Selene.')
+        self.add([source])
+        result = self.raw("What is my name now?")[0]
+        literal = raw_literal(result)
+        self.assertIn('"My name is Inara.\n"\nActually, my name is Selene.', literal)
+        self.assertIn("QUERY-FOCUSED SOURCE EXCERPTS", result["content"])
+        self.assertNotIn("PRIVATE-", literal)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

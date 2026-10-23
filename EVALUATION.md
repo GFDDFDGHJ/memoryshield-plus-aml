@@ -16,6 +16,50 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## v3.12.1: correct current-clause scope and repeated-policy ordering
+
+This patch addresses reproduced source-selection and assertion-scope defects.
+The latest aggregate Smoke result motivates the audit; it does not establish
+that any single defect caused its score changes. Models and public routes stay
+the same. All development fixtures below are invented and use temporary stores.
+
+- A clearly marked current clause after first-person historical narration is
+  evaluated independently. For example, a prior place followed by `and now I
+  live in ...` can update the location again. Reports, questions, quotations
+  and hypothetical continuations remain ineligible for an asserted current
+  value. Decimal punctuation no longer resets reporting scope. Explicit
+  example/report headers govern their contiguous source paragraph rather
+  than only its first line.
+- Required and optional occurrences of identical nonnumeric wording are
+  grouped separately during compact rendering. One required policy can no
+  longer pull all optional repeated occurrences ahead of distinctive history.
+  Source IDs, roles, timestamps and observation multiplicity are retained.
+  In independent full Add/Search fixtures with 160 and 240 policy repetitions
+  plus 20 decisions, first-8k decision coverage improves from 3/20 and 0/20
+  respectively to 20/20. These counts assess visible evidence, not answers.
+- Narrow personal-attribute excerpts retain their explicit example/report
+  context and quotation boundaries. Neighboring private fields remain outside
+  the excerpt. This source-attribution defect also existed in v3.11.1 and is
+  not attributed to v3.12.0.
+
+All 37 isolated offline scripts pass. Both fixed 47-case cached-v4 retrieval
+seeds retain all previous required evidence, role, fidelity and rank contracts.
+Extended-context, state, data and long-source controls retain 8/8, 12/12, 9/9
+and 6/6 complete-evidence contracts. The 16-worker offline search check has no
+errors, cross-user leakage or literal failures. All five public capability
+fixtures pass against a temporary offline store before deployment.
+
+An independent adversarial attribution audit passes 25/26 controls, up from
+15/26 in v3.12.0. Its remaining inline enumerated reported-speech form is a
+pre-existing unsupported grammar case, not a solved capability. Separate
+state-transfer controls improve from 5/10 to 8/10; two ambiguous compound forms
+remain conservative, with original source text retained. Dense 20k-character
+fact-line extraction is about 10.5 ms in the isolated audit after computing
+header scopes once, rather than repeatedly scanning prefixes.
+
+Local checks assess deterministic evidence and provenance. They do not measure
+the full downstream answer/judging pipeline or predict an official score.
+
 ## v3.12.0: assertion context, numbered procedures and repeated source encoding
 
 This medium update preserves the existing models, public Add/Search routes,

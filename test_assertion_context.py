@@ -38,6 +38,21 @@ NONASSERTIONS = [
     '我住在青湾吗？',
     '去年我住在青湾。',
     '假设我住在青湾。',
+    'She said I used to live in Alder Bay, and now I live in Pine Bay.',
+    'She said I used to live in Alder Bay, and I live in Pine Bay now.',
+    'Imagine I used to live in Alder Bay, and now I live in Pine Bay.',
+    'It is not true that I used to live in Alder Bay, and now I live in Pine Bay.',
+    'I used to live in Alder Bay if the stage allowed, and now I live in Pine Bay.',
+    'Previously I lived in Alder Bay, and now I live in Pine Bay if approved.',
+    'Previously I lived in Alder Bay, and now I live in Pine Bay?',
+    'I used to live in Alder Bay, and now I live in Pine Bay provided my permit is approved.',
+    'I used to live in Alder Bay, and now I live in Pine Bay, hypothetically speaking.',
+    'I used to live in Alder Bay, and now I live in Pine Bay in this fictional scenario.',
+    'She said since release 1.5 I live in Alder Bay.',
+    'Last year in 2024.05 I live in Alder Bay.',
+    'Example:\nMy name is Brindle.\nI live in Alder Bay.',
+    'The visitor said:\nMy name is Brindle.\nI live in Alder Bay.',
+    'Example:\nMy name is Brindle.\nI live in Alder Bay.\nI work at Cedar Lab.',
 ]
 
 DIRECT_ASSERTIONS = [
@@ -54,6 +69,18 @@ DIRECT_ASSERTIONS = [
     ('I no longer live in Willow Bay.', 'location', 'Willow Bay'),
     ('我住在白湾。', 'location', '白湾'),
     ('其实我住在白湾。', 'location', '白湾'),
+    ('I used to live in Alder Bay, and now I live in Pine Bay.', 'location', 'Pine Bay'),
+    ('Previously I lived in Alder Bay, and now I live in Pine Bay.', 'location', 'Pine Bay'),
+    ('Last year I left Alder Bay, and now I live in Pine Bay.', 'location', 'Pine Bay'),
+    ('I used to work at Cedar Lab, and currently I work at Pine Lab.', 'work', 'Pine Lab'),
+    ('I previously worked at Cedar Lab, and I work at Pine Lab now.', 'work', 'Pine Lab now'),
+    ('Previously I lived in Alder Bay, and I live in Pine Bay now.', 'location', 'Pine Bay now'),
+    ('Previously I lived in Alder Bay, and now I live in Example Bay.', 'location', 'Example Bay'),
+    ('I used to work at Cedar Lab, and now I work at Fictional Publishing.', 'work', 'Fictional Publishing'),
+    ('Previously my name was Brindle, and now my name is Lumen.', 'name', 'Lumen'),
+    ('As I said yesterday, I live in Pine Bay.', 'location', 'Pine Bay'),
+    ('我以前住在青湾，现在我住在白湾。', 'location', '白湾'),
+    ('以前我住在青湾，现在我住在白湾。', 'location', '白湾'),
 ]
 
 
@@ -92,6 +119,22 @@ class AssertionContextTests(unittest.TestCase):
         triples = F.extract_facts('{"subject":"Aster","relation":"material","object":"copper"}')
         self.assertEqual([(fact.subject, fact.predicate, fact.value) for fact in triples],
                          [('aster', 'material', 'copper')])
+
+    def test_header_scope_ends_at_blank_line_new_heading_or_direct_correction(self):
+        for text in (
+            'Example:\nMy name is Brindle.\nI live in Alder Bay.\n\nI live in Pine Bay.',
+            'Example:\nMy name is Brindle.\nI live in Alder Bay.\nActual details:\nI live in Pine Bay.',
+            'The visitor said:\nMy name is Brindle.\nI live in Alder Bay.\nActually, I live in Pine Bay.',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual([(f.predicate, f.value) for f in F.extract_facts(text)
+                                  if f.kind != 'rule'], [('location', 'Pine Bay')])
+
+    def test_direct_correction_ends_header_scope_for_following_lines(self):
+        text = ('Example:\nMy name is Brindle.\nI live in Alder Bay.\n'
+                'Correction: my name is Lumen.\nI live in Pine Bay.')
+        self.assertEqual([(f.predicate, f.value) for f in F.extract_facts(text)
+                          if f.kind != 'rule'], [('name', 'Lumen'), ('location', 'Pine Bay')])
 
 
 class AssertionContextIntegrationTests(unittest.TestCase):
@@ -145,6 +188,18 @@ class AssertionContextIntegrationTests(unittest.TestCase):
         self.assertEqual(self.state(), [('Willow Bay', 'active')])
         self.add('I no longer live in Willow Bay.')
         self.assertEqual(self.state(), [('Willow Bay', 'stale')])
+
+    def test_explicit_current_clause_retires_prior_location_after_historical_narration(self):
+        self.add('Previously I lived in Alder Bay, and now I live in Pine Bay.')
+        self.assertEqual(self.state(), [('Willow Bay', 'stale'), ('Pine Bay', 'active')])
+
+    def test_explicit_current_name_survives_historical_name_clause(self):
+        self.add('My name is Brindle.')
+        self.add('Previously my name was Brindle, and now my name is Lumen.')
+        with self.memory._connect() as connection:
+            values = [tuple(row) for row in connection.execute(
+                "SELECT value,status FROM facts WHERE user_id='target' AND predicate='name' ORDER BY seq")]
+        self.assertEqual(values, [('Brindle', 'stale'), ('Lumen', 'active')])
 
 
 if __name__ == '__main__':

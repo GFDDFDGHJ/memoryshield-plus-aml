@@ -325,7 +325,7 @@ _ASSERTION_QUOTES = re.compile(
     r'```[\s\S]*?```|`[^`\n]+`|"(?:\\.|[^"\\])*"|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』'
     r"|(?<![\w])'[^'\n]+'(?![\w])")
 _ASSERTION_BOUNDARY = re.compile(
-    r'[.!?。！？;；\n]|,\s*(?=(?:but|however|actually|in\s+fact)\b)'
+    r'(?<!\d)\.|\.(?!\d)|[!?。！？;；\n]|,\s*(?=(?:but|however|actually|in\s+fact)\b)'
     r'|[，,]\s*(?=(?:但(?:是)?|其实|实际上|更正))', re.I)
 _ASSERTION_REPORT = re.compile(
     r'\b(?:said|says|say|wrote|writes|asked|asks|claimed|claims|stated|states|'
@@ -351,11 +351,76 @@ _ASSERTION_HEADER = re.compile(
     r'^\s*(?:(?:quoted?\s+(?:text|example)|quote|example|fictional\s+example|'
     r'script|role[- ]?play)|(?:\w+\s+){0,3}(?:said|wrote)|'
     r'引语|引用|例子|示例|举例|假设|台词|剧本|角色扮演|他说|她说)\s*[:：]\s*$', re.I)
+_ASSERTION_HISTORY = re.compile(
+    r'\b(?:used\s+to|formerly|previously|last\s+(?:year|month|week)|back\s+then)\b'
+    r'|\b(?:in|during)\s+(?:the\s+year\s+)?(?:19|20)\d{2}\b'
+    r'|去年|前年|以前|曾经|当时|那时', re.I)
+_ASSERTION_PAST_NARRATION = re.compile(
+    r'^\s*(?:(?:previously|formerly|last\s+(?:year|month|week)|'
+    r'(?:in|during)\s+(?:the\s+year\s+)?(?:19|20)\d{2})\s*,?\s*)?'
+    r'(?:I\s+(?:(?:previously|formerly)\s+)?(?:used\s+to\s+)?'
+    r'(?:live|reside|work|lived|resided|worked|left|moved|relocated|transferred|'
+    r'was\s+(?:called|named|based))\b|my\s+(?:name|nickname|job|role|address)\s+(?:was|were)\b)'
+    r'|^\s*(?:去年|前年|以前|曾经|当时|那时)?我(?:去年|前年|以前|曾经|当时|那时)?'
+    r'(?:住在|家住|工作|就职|搬到|离开|叫)', re.I)
+_ASSERTION_CURRENT_CONTINUATION = re.compile(
+    r'[，,]\s*(?:(?:and\s+)?(?:now|currently|at\s+present)\s+|'
+    r'(?:但|而)?(?:现在|如今|目前))\s*$', re.I)
+_ASSERTION_CURRENT_END = re.compile(r'\b(?:now|currently|at\s+present)\s*[.!。]?\s*$', re.I)
+_ASSERTION_RESET_NONACTUAL = re.compile(
+    r'\bprovided\s+(?:that|I|we|you|he|she|it|they|my|our|your|his|her|their|the|this|an?|its)\b'
+    r'|\bhypothetically\s+speaking\b|[,，(—]\s*hypothetically\b'
+    r'|\bin\s+(?:this|a|the)\s+(?:hypothetical|fictional)\s+(?:scenario|story|example|case)\b'
+    r'|(?:假设|虚构)(?:情境|场景|故事|例子)', re.I)
+_ASSERTION_NEW_HEADER = re.compile(
+    r'^\s*(?:[A-Z][A-Za-z0-9 _/\-]{0,70}|[\u4e00-\u9fff]{2,20})\s*[:：]\s*$')
+_ASSERTION_DIRECT_CORRECTION = re.compile(
+    r'^\s*(?:(?:actually|correction|in\s+fact)\s*[:,]?\s*(?=(?:I|my)\b)|'
+    r'(?:其实|更正[:：]?|实际上)\s*(?=我))', re.I)
+
+
+def _assertion_header_spans(text: str) -> list[tuple[int, int]]:
+    """Find explicit quoted/example header scopes in one forward source pass.
+
+    A blank line, a different heading or a genuine direct correction ends a
+    scope. Offsets refer to the original source and exclude the heading itself.
+    """
+    spans, active_start = [], None
+    for match in re.finditer(r'[^\n]*(?:\n|$)', text):
+        if match.start() == match.end():
+            continue
+        line = match.group().rstrip('\r\n')
+        if _ASSERTION_HEADER.fullmatch(line):
+            if active_start is None:
+                active_start = match.end()
+            continue
+        correction = bool(_ASSERTION_DIRECT_CORRECTION.match(line)
+                          and not _ASSERTION_QUESTION.search(line)
+                          and not _ASSERTION_REPORT.search(line)
+                          and not _ASSERTION_NONACTUAL.search(line)
+                          and not _ASSERTION_POSTCONDITION.search(line))
+        if not line.strip() or _ASSERTION_NEW_HEADER.fullmatch(line) or correction:
+            if active_start is not None:
+                spans.append((active_start, match.start()))
+                active_start = None
+    if active_start is not None:
+        spans.append((active_start, len(text)))
+    return spans
+
+
+def _assertion_header_block(text: str, pos: int,
+                            spans: list[tuple[int, int]] | None = None) -> bool:
+    """Check a source position, optionally reusing its precomputed header scopes."""
+    if spans is None:
+        spans = _assertion_header_spans(text)
+    index = bisect_right(spans, (pos, len(text) + 1)) - 1
+    return index >= 0 and pos < spans[index][1]
 
 
 def _natural_assertion_context(text: str, pos: int,
                                quotes: list[tuple[int, int]],
-                               boundaries: list[int]) -> bool:
+                               boundaries: list[int],
+                               header_spans: list[tuple[int, int]] | None = None) -> bool:
     """Conservative local attribution, not whole-message truth inference.
 
     A later direct correction in the same source is independent of an earlier
@@ -366,6 +431,8 @@ def _natural_assertion_context(text: str, pos: int,
     quote_index = bisect_right(quotes, (pos, len(text) + 1)) - 1
     if quote_index >= 0 and pos < quotes[quote_index][1]:
         return False
+    if _assertion_header_block(text, pos, header_spans):
+        return False
     boundary_index = bisect_right(boundaries, pos)
     left = boundaries[boundary_index - 1] if boundary_index else 0
     right = boundaries[boundary_index] if boundary_index < len(boundaries) else len(text)
@@ -373,17 +440,28 @@ def _natural_assertion_context(text: str, pos: int,
     prefix = text[left:pos]
     # "As I said, I live ..." is a direct reaffirmation, not an embedded
     # reported claim. Keep this narrow discourse preface out of the report gate.
-    prefix = re.sub(r'^\s*as\s+I\s+(?:said|wrote)\s*,\s*', '', prefix, flags=re.I)
+    prefix = re.sub(r'^\s*as\s+I\s+(?:said|wrote)(?:\s+(?:yesterday|today|earlier))?\s*,\s*',
+                    '', prefix, flags=re.I)
+    # A genuine current assertion can follow a separate historical self clause.
+    # Reset only at an explicit current continuation of recognizably first-
+    # person past narration. Reporting, hypothetical and epistemic scope still
+    # extends across a comma: "She said I used to ..., and now I live ..." is
+    # not a direct assertion by this source speaker.
+    continuation = _ASSERTION_CURRENT_CONTINUATION.search(prefix)
+    if not continuation and _ASSERTION_CURRENT_END.search(text[pos:right]):
+        continuation = re.search(r'[，,]\s*(?:and\s+)?$', prefix, re.I)
+    if continuation:
+        prior = prefix[:continuation.start()]
+        if (_ASSERTION_PAST_NARRATION.search(prior) and _ASSERTION_HISTORY.search(prior)
+                and not _ASSERTION_REPORT.search(prior)
+                and not _ASSERTION_NONACTUAL.search(_ASSERTION_HISTORY.sub('', prior))
+                and not _ASSERTION_POSTCONDITION.search(prior)
+                and not _ASSERTION_RESET_NONACTUAL.search(text[pos:right])):
+            prefix = prefix[continuation.end():]
     if (_ASSERTION_QUESTION.search(clause) or _ASSERTION_REPORT.search(prefix)
             or _ASSERTION_NONACTUAL.search(prefix)
             or _ASSERTION_POSTCONDITION.search(text[pos:right])):
         return False
-    # A quoted/example header can occupy the preceding line without quotation
-    # marks. Do not turn its following demonstration into a self attribute.
-    if left and not prefix.strip():
-        previous = text[:left].rstrip('\r\n').rsplit('\n', 1)[-1]
-        if _ASSERTION_HEADER.fullmatch(previous):
-            return False
     return True
 
 
@@ -403,12 +481,13 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
     conditionals += [(m, True) for m in _COND_ZH.finditer(text)]
     quotation_spans = [(m.start(), m.end()) for m in _ASSERTION_QUOTES.finditer(text)]
     assertion_boundaries = [m.end() for m in _ASSERTION_BOUNDARY.finditer(text)]
+    header_spans = _assertion_header_spans(text)
     assertion_context_cache: dict[int, bool] = {}
 
     def asserted_position(pos: int) -> bool:
         if pos not in assertion_context_cache:
             assertion_context_cache[pos] = _natural_assertion_context(
-                text, pos, quotation_spans, assertion_boundaries)
+                text, pos, quotation_spans, assertion_boundaries, header_spans)
         return assertion_context_cache[pos]
 
     def inside_conditional(pos: int) -> bool:
@@ -2014,7 +2093,13 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
     groups = {}
     for unit in units:
         template, values = _numeric_template(unit["text"])
-        key = (unit["role"], template)
+        # One required occurrence must not promote every optional occurrence
+        # of the same whole-record wording ahead of distinctive history. Keep
+        # those zero-slot groups separate before any shared-template sorting.
+        # Numeric templates retain their existing grouping and encoding.
+        protected = (bool(unit.get('context_qualification') or unit.get('context_dependency')
+                          or unit.get('context_schema')) if not values else None)
+        key = (unit["role"], template, protected)
         groups.setdefault(key, []).append((unit, values))
     # Completely equal nonnumeric wording can also consume a whole prefix.
     # It is an encoding shared by source occurrences, never deduplication of
@@ -2048,7 +2133,7 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
                                      or unit.get('context_schema'))
                     bucket = ("literal", unit['role'], protected)
                     if bucket not in coalesced:
-                        coalesced[bucket] = ((unit['role'], None), [])
+                        coalesced[bucket] = ((unit['role'], None, protected), [])
                     coalesced[bucket][1].append((unit, values))
         group_members = list(coalesced.values())
         for key, members in group_members:
@@ -2064,9 +2149,9 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
             group[0] in literal_groups,
         ))
     pieces = []
-    for (role, template), members in group_members:
+    for (role, template, protected), members in group_members:
         source,metadata_columns,metadata = _context_metadata([unit for unit,_ in members])
-        if (role, template) in literal_groups:
+        if (role, template, protected) in literal_groups:
             lines = [source, "Literal source template: " + template,
                      "Rows below remain separate source occurrences, not one observation; the literal template has no substitution slots. Columns: source_rid@seq/segment"
                      + "".join(" | "+column for column in metadata_columns)]

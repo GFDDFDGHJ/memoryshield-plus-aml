@@ -60,6 +60,31 @@ class SummaryCoverageTests(unittest.TestCase):
         self.assertLess(text.index('0@1/0'), text.index('119@120/0'))
         self.assertNotIn('Literal source text for every row:', text)
 
+    def test_one_required_occurrence_does_not_promote_optional_repeats(self):
+        from evaluate_extended_context import decode_visible
+        topics = ('orchard harbour studio library garden workshop kitchen hatchery courtyard railway '
+                  'cabin clinic school gallery bakery brewery nursery theatre laboratory office').split()
+        for count in (160, 240):
+            rows = [unit(index, POLICY, session_id='history-'+str(index%3)) for index in range(count)]
+            claims = ['The '+topic+' decision keeps the shaded entrance.' for topic in topics]
+            rows += [unit(count+index, claim, session_id='topic-'+topic)
+                     for index, (topic, claim) in enumerate(zip(topics, claims))]
+            selected = F.context_units_for_query(rows, 'Summarize across all sessions.')
+            # The real selector intentionally protects one copy of this policy;
+            # equal source occurrences remain optional distinct observations.
+            self.assertEqual(sum(bool(row.get('context_dependency')) for row in selected), 1)
+            for budget in (8000, 12000, 16000):
+                with self.subTest(repeated=count, budget=budget):
+                    text, plan = self.pack(selected, budget)
+                    visible = decode_visible(text[:8000], complete=len(text)<=8000)
+                    self.assertTrue(set(claims) <= {item['literal'] for item in visible})
+                    self.assertIn(POLICY, text[:text.index(claims[0])])
+                    decoded = decode_visible(text, complete=True)
+                    expected = Counter((selected[index]['source_rid'], selected[index]['text'],
+                                        selected[index]['role']) for index in plan['complete_indices'])
+                    self.assertEqual(Counter((item['rid'], item['literal'], item['role'])
+                                             for item in decoded), expected)
+
     def test_compaction_preserves_every_identical_observation(self):
         literal = 'The indicator stayed amber and the operator kept the gate closed.'
         units = [unit(index, literal) for index in range(241)]

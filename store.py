@@ -1134,7 +1134,19 @@ class MemoryStore:
                     "subject": "self", "predicate": requested_attribute, "role": row["role"],
                 }, query):
                     continue
-                sentences = fact_layer._source_sentences(row["content"])
+                source_spans = dependency_layer.source_sentence_spans(row["content"])
+                sentences = [row["content"][start:end].strip() for start,end in source_spans]
+                header_spans = fact_layer._assertion_header_spans(row["content"])
+                governing_headers = {}
+                previous_header = None
+                for index, (start, end) in enumerate(source_spans):
+                    if fact_layer._ASSERTION_HEADER.fullmatch(sentences[index]):
+                        previous_header = index
+                    if previous_header is not None:
+                        source_part = row["content"][start:end]
+                        anchor_pos = start + len(source_part) - len(source_part.lstrip())
+                        if fact_layer._assertion_header_block(row["content"], anchor_pos, header_spans):
+                            governing_headers[index] = previous_header
                 matched_indexes, unresolved = set(), []
                 for sentence_index, sentence in enumerate(sentences):
                     parsed = fact_layer.extract_facts(sentence)
@@ -1164,6 +1176,12 @@ class MemoryStore:
                     retained_indexes = set(matched_indexes)
                     retained_indexes.update(dependency_layer.dependency_indexes(sentences, matched_indexes))
                     for index in matched_indexes:
+                        # A source header governs its contiguous paragraph,
+                        # even when a preceding quoted line concerns another
+                        # property. Keep only that exact attribution header,
+                        # rather than exposing intervening personal fields.
+                        if index in governing_headers:
+                            retained_indexes.add(governing_headers[index])
                         previous = index - 1
                         while previous >= 0 and fact_layer._CONTEXT_QUALIFIER.search(sentences[previous].strip()):
                             retained_indexes.add(previous)
@@ -1180,8 +1198,28 @@ class MemoryStore:
                             retained_indexes.add(following)
                             qualifying, previous_topics = True, topics
                             following += 1
-                    attribute_quotes[row["rid"]] = "\n".join(
-                        sentence for index,sentence in enumerate(sentences) if index in retained_indexes)
+                    # A quote can span several source sentences. Selecting
+                    # only its requested field must not erase its quotation
+                    # scope. Preserve missing original delimiters, without
+                    # copying other fields merely to reach the closing quote.
+                    opening_quotes, closing_quotes = {}, {}
+                    selected_spans = [(index, source_spans[index]) for index in sorted(retained_indexes)]
+                    for quotation in fact_layer._ASSERTION_QUOTES.finditer(row["content"]):
+                        left, right = quotation.span()
+                        members = [index for index,(start,end) in selected_spans if start < right and end > left]
+                        if not members:
+                            continue
+                        width = 3 if quotation.group().startswith('```') else 1
+                        if not any(start <= left < end for _,(start,end) in selected_spans):
+                            opening_quotes.setdefault(members[0], []).append(row["content"][left:left+width])
+                        if not any(start < right <= end for _,(start,end) in selected_spans):
+                            closing_quotes.setdefault(members[-1], []).append(row["content"][right-width:right])
+                    pieces = []
+                    for index in sorted(retained_indexes):
+                        pieces.extend(opening_quotes.get(index, ()))
+                        pieces.append(sentences[index])
+                        pieces.extend(closing_quotes.get(index, ()))
+                    attribute_quotes[row["rid"]] = "\n".join(pieces)
                 elif unresolved and self_reference.search(" ".join(unresolved)):
                     attribute_fallback[row["rid"]] = "\n".join(unresolved)
             # Parsing failure is uncertainty, not evidence of irrelevance.
