@@ -2152,7 +2152,97 @@ def _context_metadata(units: list[dict]):
     return header,columns,metadata
 
 
-def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list[str]:
+def _global_context_presentation(units: list[dict]) -> tuple[list[dict], dict[int, int]]:
+    """Move literal representatives, never copy or synthesize observations.
+
+    Only global views containing presentational policies or repeated whole
+    nonnumeric records use this schedule. All original pointers and metadata
+    survive, so display order is distinct from the original seq/segment order.
+    Numeric-only views keep their existing representation and row order.
+    """
+    def hard(unit):
+        return bool(unit.get('context_qualification') or unit.get('context_schema')
+                    or unit.get('context_dependency') and not unit.get('context_response_policy'))
+    soft_wordings = {(unit['role'], unit['text']) for unit in units
+                     if unit.get('context_response_policy') and not hard(unit)}
+    occurrences = {}
+    for unit in units:
+        if (not _NUMERIC_LITERAL.search(unit['text'])
+                and str(unit.get('content', unit['text'])).strip() == unit['text']
+                and 'source_char_start' not in unit):
+            occurrences.setdefault((unit['role'], unit['text']), set()).add(unit['source_rid'])
+    if not soft_wordings and not any(len(sources) >= 3 for sources in occurrences.values()):
+        return sorted(units, key=lambda unit: not hard(unit)), {}
+
+    def spread(values):
+        values = list(values)
+        if not values:
+            return []
+        out = [values[0]]
+        if len(values) > 1:
+            out.append(values[-1])
+        intervals = [(1, len(values)-2)]
+        while intervals:
+            following = []
+            for left, right in intervals:
+                if left <= right:
+                    middle = (left+right)//2
+                    out.append(values[middle])
+                    following.extend(((left, middle-1), (middle+1, right)))
+            intervals = following
+        return out
+
+    bands = {id(unit): 0 if hard(unit) else
+             4 if (unit['role'], unit['text']) in soft_wordings else 3 for unit in units}
+    # Share a bounded front of presentational evidence. Unknown, substantive,
+    # privacy or epistemic policies are hard controls and never enter band 4.
+    remaining, represented = 2000, set()
+    for unit in units:
+        key = (unit['role'], unit['text'])
+        if bands[id(unit)] != 4 or key in represented:
+            continue
+        cost = len(unit['text']) + len(str(unit['source_rid'])) + 100
+        if cost <= remaining:
+            bands[id(unit)] = 1
+            remaining -= cost
+            represented.add(key)
+
+    sources, sessions = {}, {}
+    for unit in units:
+        if bands[id(unit)] != 3:
+            continue
+        source = unit['source_rid']
+        sources.setdefault(source, []).append(unit)
+        session = sessions.setdefault(unit['session_id'], [])
+        if not session or session[-1] != source:
+            session.append(source)
+    queues = [spread(sessions[session]) for session in spread(sessions)]
+    source_order = [queue[rank] for rank in range(max(map(len, queues), default=0))
+                    for queue in queues if rank < len(queue)]
+    source_queues = [sorted(sources[source], key=lambda unit: not unit.get('context_salient'))
+                     for source in source_order]
+    visit = [queue[rank] for rank in range(max(map(len, source_queues), default=0))
+             for queue in source_queues if rank < len(queue)]
+    remaining, represented, heads = 4000, set(), []
+    for unit in visit:
+        key = (unit['role'], unit['text'])
+        if key in represented or _NUMERIC_LITERAL.search(unit['text']):
+            continue
+        cost = len(unit['text']) + len(str(unit['source_rid'])) + 100
+        if cost <= remaining:
+            bands[id(unit)] = 2
+            heads.append(unit)
+            represented.add(key)
+            remaining -= cost
+    ordered = ([unit for unit in units if bands[id(unit)] < 2] + heads
+               + [unit for unit in units if bands[id(unit)] >= 3])
+    # Only the bounded representative head is reordered. Every remainder
+    # keeps its incoming within-band order; seq/segment retain source order.
+    return sorted(ordered, key=lambda unit: bands[id(unit)]), bands
+
+
+def _context_pieces(units: list[dict], *, compact_numeric: bool = False,
+                    global_presentation: bool = False) -> list[str]:
     """Losslessly share repeated wording while retaining each source.
 
     Literal templates keep signs, precision, conditions and units exactly as
@@ -2161,8 +2251,12 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
     # Validity restrictions qualify the data that follows. Quote their real
     # source first so a consumer's prefix cannot read a sampled numeric block
     # as usable evidence while missing its later withdrawal.
-    units=sorted(units,key=lambda unit:not (unit.get('context_qualification') or unit.get('context_dependency')
-                                           or unit.get('context_schema')))
+    if global_presentation:
+        units, presentation_bands = _global_context_presentation(units)
+    else:
+        units=sorted(units,key=lambda unit:not (unit.get('context_qualification') or unit.get('context_dependency')
+                                               or unit.get('context_schema')))
+        presentation_bands = {}
     if not compact_numeric:
         source,metadata_columns,metadata = _context_metadata(units)
         lines=[source,"Columns: source_rid@seq/segment"
@@ -2202,7 +2296,28 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
     if literal_groups:
         positions = {id(unit): index for index, unit in enumerate(units)}
         coalesced = {}
+        def literal_member(unit, values):
+            protected = bool(unit.get('context_qualification') or unit.get('context_dependency')
+                             or unit.get('context_schema'))
+            bucket = ('literal', unit['role'], protected,
+                      presentation_bands.get(id(unit)) if presentation_bands else None)
+            if bucket not in coalesced:
+                coalesced[bucket] = ((unit['role'], None, protected), [])
+            coalesced[bucket][1].append((unit, values))
         for key, members in groups.items():
+            if key in literal_groups and presentation_bands:
+                # A shared literal may represent many real source records.
+                # Move a front representative into the ordinary attributed
+                # table and leave its other occurrences in the tail codec.
+                # The representative is removed here, never emitted twice.
+                head = [(unit, values) for unit, values in members
+                        if presentation_bands[id(unit)] in {1, 2}]
+                members = [(unit, values) for unit, values in members
+                           if presentation_bands[id(unit)] not in {1, 2}]
+                for unit, values in head:
+                    literal_member(unit, values)
+                if not members:
+                    continue
             compact_group = key in literal_groups or (len(members) >= 3 and members[0][1])
             if compact_group:
                 coalesced[("template", key)] = (key, members)
@@ -2210,12 +2325,7 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
                 # Qualification-bearing rows precede optional context just as
                 # in the literal layout. Do not absorb them into a later block.
                 for unit, values in members:
-                    protected = bool(unit.get('context_qualification') or unit.get('context_dependency')
-                                     or unit.get('context_schema'))
-                    bucket = ("literal", unit['role'], protected)
-                    if bucket not in coalesced:
-                        coalesced[bucket] = ((unit['role'], None, protected), [])
-                    coalesced[bucket][1].append((unit, values))
+                    literal_member(unit, values)
         group_members = list(coalesced.values())
         for key, members in group_members:
             if key[1] is None:
@@ -2224,11 +2334,14 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
         # into the consumer's entire prefix. Keep controlling evidence first,
         # then uncommon wording before ordinary repeated-literal occurrence
         # rows. Every source occurrence is still present in this encoding.
-        group_members.sort(key=lambda group: (
-            not any(unit.get('context_qualification') or unit.get('context_dependency')
-                    or unit.get('context_schema') for unit, _ in group[1]),
-            group[0] in literal_groups,
-        ))
+        if presentation_bands:
+            group_members.sort(key=lambda group: min(positions[id(unit)] for unit, _ in group[1]))
+        else:
+            group_members.sort(key=lambda group: (
+                not any(unit.get('context_qualification') or unit.get('context_dependency')
+                        or unit.get('context_schema') for unit, _ in group[1]),
+                group[0] in literal_groups,
+            ))
     pieces = []
     for (role, template, protected), members in group_members:
         source,metadata_columns,metadata = _context_metadata([unit for unit,_ in members])
@@ -2340,13 +2453,14 @@ def _pack_context(
                 sizes[group_index] += len(piece) + 1
             return [prefix + "\n".join(group) for group in groups if group]
 
-        normal = assemble(_context_pieces(chosen))
+        normal = assemble(_context_pieces(chosen, global_presentation=(scope == 'global')))
         # Literal source wording is preferred when it fits. Numeric templates
         # are an alternative encoding, never a reason to inflate the context
         # and then throw away a much larger portion of the source evidence.
         if sum(map(len, normal)) <= budget_chars:
             return normal
-        compact = assemble(_context_pieces(chosen, compact_numeric=True))
+        compact = assemble(_context_pieces(chosen, compact_numeric=True,
+                                           global_presentation=(scope == 'global')))
         return min((normal, compact), key=lambda output: sum(map(len, output)))
 
     full = render(range(total))

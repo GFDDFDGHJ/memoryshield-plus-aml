@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **v3.14.0**. Repository:
+Candidate version: **v3.15.0**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -46,11 +46,12 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
   that scope. Explicit private-field exclusions remain separate constraints.
 - Topic synthesis uses the same query plan in selection and budgeting. Global
   context schedules less-repeated literal sentences before repeated background,
-  without merging observations. One original instance of each applicable global
-  response policy is protected before optional context; every source RID remains.
+  without merging observations. Hard global constraints remain protected; known presentational policies have
+  a bounded front with explicit omission disclosure when sampled. Every selected
+  source RID remains recoverable from the view and its continuation.
 - Bounded global summaries visit less-repeated sentences within each source
-  before round-robin sampling across sources. Complete short views keep their
-  original order; continuations still preserve all selected source segments.
+  before round-robin sampling across sources. Global views can display distinct representative records first; original
+  sequence and within-source positions remain attached to every selected segment.
 - When literal context exceeds its budget, identical whole records can share
   one literal template while keeping a separate metadata row for every source
   occurrence. Distinct RIDs and repeated observations are retained; a summary

@@ -16,6 +16,66 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## v3.15.0: original table formats, bullet procedures and global display order
+
+This medium update repairs three independent retrieval-format defects. Models,
+storage schema and public routes stay unchanged. Development uses invented
+fixtures and temporary databases; official task messages and answers are not read.
+
+- A declared pipe table accepts its immediately following Markdown alignment
+  line as original schema metadata. Every cell must be `:?-{3,}:?`, with the
+  same column count. The original physical-line gap must be exactly one
+  newline in the same source. Blank lines, removed private segments, new turns,
+  wrong widths and narrative text cannot be skipped. No values are projected
+  or invented; alignment lines do not count as observations. Quoted CSV remains
+  outside this extension.
+- Explicit procedure headings can retain a uniform `-`, `*` or `•` operational
+  list with its labelled initial state. Bullet peers must have equal expanded
+  indentation; nesting and outdents reject the new block rather than flatten
+  its meaning. The existing numbered/named-list continuation behavior remains.
+  Original role, order, privacy-gap and size guards continue to apply, and no
+  operation is executed by the memory service.
+- Global source views expose a bounded set of distinct literal history records
+  before the remaining repeated occurrence rows, even when the entire view
+  fits the character budget. Hard qualifications and schema stay first; known
+  presentational preferences receive a bounded front. A representative moved
+  out of a repeated nonnumeric template is removed from its tail occurrence
+  rows, so every selected source still occurs exactly once. Numeric-only views
+  and ordinary/topic-specific output retain their existing representation.
+  Display order can differ from source order; original sequence, segment,
+  timestamp and role remain available to reconstruct it. Global continuation
+  budget selection also counts the actual protected prefix, including raw and
+  rule evidence outside the digest. A source continuation that fits the
+  configured extended ceiling cannot be discarded merely because those
+  additional prefix characters were omitted from the threshold calculation.
+  Configured upper bounds and result-count limits continue to apply.
+
+Three frozen Markdown formats improve observation coverage from 23/151 to
+151/151 in an 8k prefix and 97/151 to 151/151 in the full return. Plain tables
+and existing multi-line declarations remain complete. Three bullet procedure
+variants improve from 3/6 to 6/6 necessary original lines at Top K 1 and 100;
+eleven negative scope controls remain rejected. A separate hierarchy review
+found and corrected nested/outdented-peer handling before release.
+
+In frozen high-width-ID fixtures, the full-fit policy/history view improves
+from 2/8 to 8/8 visible domains in an 8k prefix while keeping all 128 source
+segments and the same 8643-character size. Repeated whole-record history
+improves from 6/8 to 8/8 while retaining all 160 occurrences; its lossless
+encoding grows from 10409 to 11695 characters. Numeric multiplicity, private
+exclusions, mandatory qualifications and ordinary topical ordering are checked
+separately. The scheduling head is bounded, so arbitrary histories are not
+guaranteed complete in every prefix. These are evidence-coverage measurements,
+not generated-answer quality or predicted official scores.
+
+All 37 isolated offline scripts pass on the frozen sources. Both fixed
+47-case cached-v4 seeds retain their earlier required evidence and prefix
+contracts without regressions. Extended-context, state, data and long-source
+controls retain 8/8, 12/12, 9/9 and 6/6 complete-evidence contracts. A 16-worker
+offline check has no errors, literal failures or cross-user leakage. Existing
+plain-table controls retain all 151 observations in each of nine cases, and
+three personal-table exclusion controls remain closed. Exact new public
+capability fixtures pass offline before deployment.
+
 ## v3.14.0: assertion boundaries, procedure inputs and bounded policy coverage
 
 This medium update repairs independently reproduced evidence gaps. It keeps

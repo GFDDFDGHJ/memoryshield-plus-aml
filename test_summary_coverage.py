@@ -233,7 +233,7 @@ class SummaryCoverageTests(unittest.TestCase):
         self.assertTrue(all(claim in text for claim in claims))
         self.assertTrue(set(range(len(guards))) <= plan['complete_indices'])
 
-    def test_short_policy_catalogue_stays_complete_and_full_fit_is_unchanged(self):
+    def test_short_policy_catalogue_stays_complete_and_full_source_set_is_unchanged(self):
         units, policies, claims = self.presentational_history(13)
         for index in range(90):
             units.append(unit(3000+index, 'Historical observation '+str(index)+': '
@@ -246,8 +246,51 @@ class SummaryCoverageTests(unittest.TestCase):
         for row in old_units:
             row.pop('context_response_policy', None)
         old_full, old_plan = self.pack(old_units, 100000)
-        self.assertEqual(full, old_full)
+        # Global display order is balanced even when the complete source set
+        # fits. Original chronological order remains exactly recoverable from
+        # seq/segment; literal wording, role, multiplicity and IDs cannot change.
+        from evaluate_extended_context import decode_visible
+        keys = ('rid', 'seq', 'segment', 'role', 'literal')
+        self.assertEqual(Counter(tuple(row[key] for key in keys)
+                                 for row in decode_visible(full, complete=True)),
+                         Counter(tuple(row[key] for key in keys)
+                                 for row in decode_visible(old_full, complete=True)))
         self.assertEqual(full_plan, old_plan)
+
+    def test_large_source_ids_do_not_hide_distinct_history_in_a_complete_view(self):
+        from evaluate_extended_context import decode_visible
+        units, policies, claims = self.presentational_history()
+        for index, row in enumerate(units):
+            row.update(rid=1000000001+index, source_rid=1000000001+index)
+        text, plan = self.pack(units, 12000)
+        self.assertTrue(all(claim in text[:8000] for claim in claims))
+        self.assertEqual(plan['complete_indices'], set(range(len(units))))
+        visible = decode_visible(text, complete=True)
+        self.assertEqual(Counter((row['rid'], row['seq'], row['segment'], row['role'], row['literal'])
+                                 for row in visible),
+                         Counter((row['source_rid'], row['seq'], row['segment'], row['role'], row['text'])
+                                 for row in units))
+
+    def test_zero_slot_heads_move_occurrences_without_duplicating_observations(self):
+        from evaluate_extended_context import decode_visible
+        claims = ['I chose '+topic+' because quiet evening classes suit my schedule.'
+                  for topic in 'ceramics astronomy weaving kayaking linguistics genealogy apiculture marquetry'.split()]
+        rows = [unit(1000000000+index, claim, seq=index+1)
+                for index, claim in enumerate(claim for claim in claims for _ in range(20))]
+        text, plan = self.pack(rows, 12000)
+        self.assertTrue(all(claim in text[:8000] for claim in claims))
+        decoded = decode_visible(text, complete=True)
+        self.assertEqual(len(decoded), 160)
+        self.assertEqual(len({(row['rid'], row['segment']) for row in decoded}), 160)
+        self.assertEqual(plan['complete_indices'], set(range(len(rows))))
+        self.assertEqual(Counter((row['rid'], row['role'], row['literal']) for row in decoded),
+                         Counter((row['source_rid'], row['role'], row['text']) for row in rows))
+
+    def test_numeric_only_codec_is_byte_identical_under_global_presentation(self):
+        rows = [unit(index, 'Reading='+str(index%7)+' kPa; duration='+str(index%5)+' ms.',
+                     role='assistant' if index%2 else 'user') for index in range(120)]
+        self.assertEqual(F._context_pieces(rows, compact_numeric=True),
+                         F._context_pieces(rows, compact_numeric=True, global_presentation=True))
 
     def test_sample_has_one_policy_per_source_and_explicitly_retains_omissions(self):
         units, policies, claims = self.presentational_history(one_source=True)

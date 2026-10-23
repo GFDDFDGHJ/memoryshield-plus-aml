@@ -33,6 +33,76 @@ class ContextDataTests(unittest.TestCase):
             indexes.append(group)
         return units, indexes
 
+    def test_declared_markdown_alignment_is_literal_schema_not_an_observation(self):
+        for header, alignment, record in (
+                ('| sample | outcome | climate |', '| --- | --- | --- |', '| K001 | pass | dry |'),
+                ('| sample | outcome | climate |', '| :--- | :---: | ---: |', '| K001 | pass | dry |'),
+                ('sample | outcome | climate', '--- | :---: | ---:', 'K001 | pass | dry')):
+            with self.subTest(alignment=alignment):
+                units, groups = self.make([['Sorrel observation columns:', header, alignment]] + [[record] for _ in range(8)])
+                original = copy.deepcopy(units)
+                extra, schema = D.expand(units, {0})
+                self.assertTrue({group[0] for group in groups[1:]} <= extra)
+                self.assertEqual(schema, set(groups[0]))
+                self.assertIn(alignment, [units[index]['text'] for index in schema])
+                self.assertEqual(units, original)
+
+    def test_markdown_alignment_requires_exact_width_and_three_hyphens_per_cell(self):
+        for alignment in ('| --- | --- |', '| --- | note | --- |', '| --- | 3 | --- |',
+                          '| -- | --- | --- |', '|| --- | --- | --- ||', '| --- | --- | --- | --- |'):
+            with self.subTest(alignment=alignment):
+                units, _ = self.make([['Sorrel observation columns:', '| sample | outcome | climate |', alignment]] +
+                                    [['| K001 | pass | dry |'] for _ in range(5)])
+                self.assertEqual(D.expand(units, {0}), (set(), set()))
+
+    def test_markdown_alignment_requires_its_declared_header_on_previous_physical_line(self):
+        for interposed in ('', 'Unrelated garden diary.', 'My private address is SECRET-ADDRESS.'):
+            with self.subTest(interposed=interposed):
+                units, _ = self.make([['Sorrel observation columns:', '| sample | outcome | climate |',
+                    interposed, '| --- | --- | --- |']] + [['| K001 | pass | dry |'] for _ in range(5)])
+                self.assertEqual(D.expand(units, {0}), (set(), set()))
+        units, _ = self.make([['Sorrel observation columns:', '| sample | outcome | climate |'],
+                            ['| --- | --- | --- |']] + [['| K001 | pass | dry |'] for _ in range(5)])
+        self.assertEqual(D.expand(units, {0}), (set(), set()))
+
+    def test_hidden_private_gap_before_alignment_is_not_reconnected(self):
+        units, groups = self.make([['Sorrel observation columns:', '| sample | outcome | climate |',
+            'My private address is SECRET-ADDRESS.', '| --- | --- | --- |']] +
+            [['| K001 | pass | dry |'] for _ in range(5)])
+        filtered = [unit for index, unit in enumerate(units) if index != groups[0][2]]
+        self.assertEqual(D.expand(filtered, {0}), (set(), set()))
+
+    def test_markdown_alignment_does_not_license_unheaded_or_non_pipe_tables(self):
+        for header, alignment, row in (
+                ('| sample | outcome | climate |', '| --- | --- | --- |', '| K001 | pass | dry |'),
+                ('sample,outcome,climate', '---,---,---', 'K001,pass,dry')):
+            title = 'Ordinary scratchpad:' if '|' in header else 'Sorrel observation columns:'
+            units, _ = self.make([[title, header, alignment]] + [[row] for _ in range(5)])
+            self.assertEqual(D.expand(units, {0}), (set(), set()))
+
+    def test_markdown_data_still_stops_at_role_session_and_record_sequence_gaps(self):
+        for boundary in ({'role':'assistant'}, {'session':'other'}, {'gap':True}):
+            records = [['Sorrel observation columns:', '| sample | outcome | climate |', '| --- | --- | --- |']]
+            records += [[f'| K{i:03d} | pass | dry |'] for i in range(3)]
+            records += [dict(parts=['| K003 | pass | dry |'], **{k:v for k,v in boundary.items() if k!='gap'})]
+            records += [[f'| K{i:03d} | pass | dry |'] for i in range(4,7)]
+            units, groups = self.make(records)
+            if boundary.get('gap'):
+                for unit in units:
+                    if unit['seq'] >= 5:unit['seq'] += 1
+            extra, _ = D.expand(units, {0})
+            self.assertTrue({groups[index][0] for index in (1,2,3)} <= extra)
+            self.assertFalse({group[0] for group in groups[4:]} & extra)
+
+    def test_declared_private_markdown_table_remains_withheld(self):
+        for header, value, category in (
+                ('name | outcome | climate', 'Invented Person | pass | dry', 'name'),
+                ('phone | outcome | climate', '+1 (212) 555-0198 | pass | dry', 'phone')):
+            units, _ = self.make([['Sorrel observation columns:', '| '+header+' |', '| --- | --- | --- |']] +
+                                [['| '+value+' |'] for _ in range(5)])
+            self.assertEqual(D.excluded_table_indexes(units, [category]), set(range(len(units))))
+            if category == 'phone':self.assertEqual(D.expand(units, {0}), (set(), set()))
+
     def test_front_schema_keeps_original_rows_and_units(self):
         units, groups = self.make([self.schema()] + [[self.row(index)] for index in range(7)])
         original = copy.deepcopy(units)

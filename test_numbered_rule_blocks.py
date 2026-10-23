@@ -320,5 +320,126 @@ class LabelledRuleIntegrationTests(unittest.TestCase):
             harness.tearDown()
 
 
+class BulletRuleBlockTests(unittest.TestCase):
+    def program(self, marker='-'):
+        return ('Nettle controller procedure:\n'
+                'Initial state: latch is open and tally is zero.\n'
+                +marker+' If latch is closed, add seven to tally.\n'
+                +marker+' If tally is zero, close the latch.\n'
+                +marker+' If latch is closed, output the Nettle release decision.\n'
+                'Execute the operations once in written order.\n')
+
+    def test_each_uniform_marker_recovers_heading_state_and_all_actions(self):
+        for marker in ('-', '*', '•'):
+            with self.subTest(marker=marker):
+                text = self.program(marker)
+                anchor = text.index('output the Nettle')
+                self.assertEqual(D.numbered_rule_spans(text, [(anchor,anchor+6)]), [(0,len(text))])
+
+    def test_same_level_mixed_markers_and_numbered_named_items_are_rejected(self):
+        for marker in ('*', '•', '2.', 'Rule Reset:'):
+            with self.subTest(marker=marker):
+                text = self.program().replace('- If tally', marker+' If tally')
+                anchor = text.index('output the Nettle')
+                self.assertEqual(D.numbered_rule_spans(text, [(anchor,anchor+6)]), [])
+
+    def test_nested_or_outdented_peer_bullets_are_not_flattened(self):
+        for marker in ('-', '*', '•'):
+            text = self.program(marker)
+            for changed in (
+                text.replace(marker+' If tally', '    '+marker+' If tally'),
+                text.replace('\n'+marker, '\n    '+marker).replace('    '+marker+' If tally', marker+' If tally'),
+            ):
+                with self.subTest(marker=marker):
+                    anchor = changed.index('output the Nettle')
+                    self.assertEqual(D.numbered_rule_spans(changed, [(anchor,anchor+6)]), [])
+
+    def test_peer_bullet_indentation_uses_expanded_tab_width(self):
+        text = self.program().replace('\n- ', '\n        - ').replace('        - If tally', '\t- If tally')
+        anchor = text.index('output the Nettle')
+        self.assertEqual(D.numbered_rule_spans(text, [(anchor,anchor+6)]), [(0,len(text))])
+
+    def test_bullet_operation_requires_heading_and_genuine_instruction_grammar(self):
+        controls = (
+            self.program().replace('Nettle controller procedure:\n', ''),
+            self.program().replace('Nettle controller procedure:', 'Favourite places:'),
+            self.program().replace('If tally is zero, close the latch.', 'The latch was closed.'),
+            self.program().replace('If tally is zero, close the latch.', 'Return Logistics opened a depot.'),
+        )
+        for text in controls:
+            anchor = text.index('output the Nettle')
+            self.assertEqual(D.numbered_rule_spans(text, [(anchor,anchor+6)]), [])
+
+    def test_blank_scope_and_narrative_gaps_are_not_joined(self):
+        for gap in ('\n', 'For the Yew controller only:\n', 'The ordinary garden is quiet.\n'):
+            text = self.program().replace('- If tally', gap+'- If tally')
+            anchor = text.index('output the Nettle')
+            self.assertEqual(D.numbered_rule_spans(text, [(anchor,anchor+6)]), [])
+
+    def test_oversized_lists_and_too_many_initial_declarations_remain_rejected(self):
+        text = 'Nettle controller procedure:\n'+'- If tally is zero, add one to tally.\n'*26
+        anchor = text.rfind('If tally')
+        self.assertEqual(D.numbered_rule_spans(text, [(anchor,anchor+6)]), [])
+        text = self.program().replace('- If latch is closed, add',
+                'Initial values: tally is zero.\nStarting configuration: mode is plain.\n- If latch is closed, add')
+        anchor = text.index('output the Nettle')
+        self.assertEqual(D.numbered_rule_spans(text, [(anchor,anchor+6)]), [])
+
+    def test_legacy_deeper_indented_bullet_qualification_is_still_a_continuation(self):
+        for first,second in (('1.', '2.'), ('Rule First:', 'Rule Second:')):
+            text = ('Nettle controller procedure:\n'
+                    +first+' Set the tally to zero.\n'
+                    '   - Unless the timer is idle, retain the count.\n'
+                    +second+' If tally is zero, output the release decision.\n')
+            anchor = text.index('output the release')
+            self.assertEqual(D.numbered_rule_spans(text, [(anchor,anchor+6)]), [(0,len(text))])
+
+
+class BulletRuleIntegrationTests(unittest.TestCase):
+    def test_long_source_preview_and_search_keep_all_original_lines_and_speaker(self):
+        import test_rerank_store as T
+        h = T.ScopedDatabaseIntegrationTests()
+        h.setUp()
+        try:
+            h.memory._reranker = None
+            for marker in ('-', '*', '•'):
+                program = BulletRuleBlockTests().program(marker)
+                source = 'The storeroom holds ordinary blank folders and unused hooks. '*100+'\n'+program
+                query = 'Apply the Nettle controller procedure and report the release decision.'
+                preview = T.S._query_preview(source, query, 1200)
+                for line in program.splitlines():
+                    self.assertEqual(preview.count(line), 1)
+                h.memory.add_messages('marker-'+marker, 'invented-program', [dict(role='assistant',content=source,timestamp=1740000000000)])
+                for k in (1,100):
+                    rows = h.memory.search('marker-'+marker, query, k)
+                    text = '\n'.join(row['content'] for row in rows)[:8000]
+                    self.assertTrue(all(line in text for line in program.splitlines()))
+                    self.assertTrue(all(row['role']=='assistant' for row in rows if row.get('source_rid')))
+        finally:
+            h.tearDown()
+
+    def test_privacy_gap_does_not_reconnect_a_bullet_program(self):
+        import facts as F
+        text = BulletRuleBlockTests().program().replace('Initial state: latch is open and tally is zero.',
+                    'Initial state: my home address is 81 Invented Pine Road.')
+        selected = [dict(source_rid=17,segment=i,text=part,content=text)
+                    for i,part in enumerate(F._source_sentences(text)) if 'home address' not in part]
+        anchor = next(i for i,unit in enumerate(selected) if 'output the Nettle' in unit['text'])
+        extra = F._procedure_dependency_indexes(selected, {anchor})
+        visible = '\n'.join(selected[i]['text'] for i in extra)
+        self.assertNotIn('add seven to tally', visible)
+        self.assertNotIn('If tally is zero', visible)
+        self.assertNotIn('81 Invented', visible)
+
+    def test_small_budget_discloses_omission_of_the_complete_bullet_block(self):
+        from test_rerank_store import S
+        source = 'The storeroom holds ordinary blank folders and unused hooks. '*100+'\n'+BulletRuleBlockTests().program()
+        preview = S._query_preview(source, 'Apply the Nettle controller procedure and report the release decision.', 200)
+        self.assertRegex(preview, 'INCOMPLETE EVIDENCE|source text omitted')
+        for line in BulletRuleBlockTests().program().splitlines():
+            if line.startswith('- '):
+                self.assertNotIn(line, preview)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -84,6 +84,7 @@ def execution_control_indexes(sentences: list[str]) -> set[int]:
 _NUMBERED_LINE = re.compile(r'^\s*(?P<number>\d{1,3})[.)]\s+(?P<body>\S.*)$')
 _NAMED_RULE_LINE = re.compile(
     r'^\s*Rule\s+(?P<label>[A-Za-z][A-Za-z0-9_-]{0,31})\s*:\s+(?P<body>\S.*)$', re.I)
+_BULLET_RULE_LINE = re.compile(r'^\s*(?P<marker>[-*•])\s+(?P<body>\S.*)$')
 _INITIAL_DECLARATION = re.compile(
     r'^\s*(?:initial|starting)\s+(?:state|values?|conditions?|configuration)\s*:\s+\S', re.I)
 _RULE_ACTION = (
@@ -111,13 +112,18 @@ def _operational_item(body: str) -> bool:
     return bool(_ITEM_ARITHMETIC.match(body) or _ITEM_OBJECT.match(body))
 
 
+def _indent_width(text: str) -> int:
+    return len(text[:len(text)-len(text.lstrip(' \t'))].expandtabs())
+
+
 def _numbered_rule_blocks(text: str) -> list[tuple[int, int]]:
     """Find bounded headed literal procedures; never resolve a source.
 
-    A list can use consecutive ordinals or unique explicit ``Rule LABEL:``
-    labels. Up to two labelled initial declarations may occur between its
-    heading and first operation. An earlier unscoped declaration is not
-    attached to a later heading, and no variable or rule is interpreted.
+    A list can use consecutive ordinals, unique explicit ``Rule LABEL:``
+    labels, or one uniform bullet marker. Up to two labelled initial
+    declarations may occur between its heading and first operation. An
+    earlier unscoped declaration is not attached to a later heading, and no
+    variable or rule is interpreted.
     """
     spans = source_sentence_spans(text)
     lines = []
@@ -130,11 +136,13 @@ def _numbered_rule_blocks(text: str) -> list[tuple[int, int]]:
     while at < len(lines):
         match = _NUMBERED_LINE.fullmatch(lines[at][2])
         named = _NAMED_RULE_LINE.fullmatch(lines[at][2])
-        if not match and not named:
+        bullet = _BULLET_RULE_LINE.fullmatch(lines[at][2])
+        if not match and not named and not bullet:
             at += 1
             continue
         first = at
-        numbered = bool(match)
+        style = 'numbered' if match else 'named' if named else bullet['marker']
+        item_indent = _indent_width(lines[first][2])
         number = int(match['number']) if match else None
         labels = set()
         bodies = []
@@ -142,31 +150,41 @@ def _numbered_rule_blocks(text: str) -> list[tuple[int, int]]:
         while at < len(lines):
             current = _NUMBERED_LINE.fullmatch(lines[at][2])
             named = _NAMED_RULE_LINE.fullmatch(lines[at][2])
-            if not current and not named:
+            bullet = _BULLET_RULE_LINE.fullmatch(lines[at][2])
+            if not current and not named and not bullet:
                 break
-            if bool(current) != numbered:
+            current_style = 'numbered' if current else 'named' if named else bullet['marker']
+            if (current_style != style
+                    or style in {'-', '*', '•'} and _indent_width(lines[at][2]) != item_indent):
                 invalid = True
             if current:
                 if number is None or int(current['number']) != number:
                     invalid = True
                 number = int(current['number']) + 1
                 body = current['body']
-            else:
+            elif named:
                 label = named['label'].casefold()
                 if label in labels:
                     invalid = True
                 labels.add(label)
                 body = named['body']
+            else:
+                body = bullet['body']
             if not _operational_item(body):
                 invalid = True
             bodies.append(body)
             at += 1
             # Indented continuation lines remain literal members of that
             # item; a blank line is an explicit scope barrier.
+            # A deeper bullet already served as a continuation under the
+            # older numbered/named grammar; do not turn it into a new peer.
             while (at < len(lines) and lines[at][2].strip()
                    and lines[at][2][:1] in {' ', '\t'}
                    and not _NUMBERED_LINE.fullmatch(lines[at][2])
-                   and not _NAMED_RULE_LINE.fullmatch(lines[at][2])):
+                   and not _NAMED_RULE_LINE.fullmatch(lines[at][2])
+                   and (not _BULLET_RULE_LINE.fullmatch(lines[at][2])
+                        or style in {'numbered', 'named'}
+                        and _indent_width(lines[at][2]) > item_indent)):
                 at += 1
         if invalid or not 2 <= len(bodies) <= MAX_DEPENDENCIES or first == 0:
             continue
@@ -219,8 +237,9 @@ def numbered_rule_indexes(text: str, anchors: set[int]) -> set[int]:
 
     A matching sentence may need earlier steps whose variables differ. The
     procedure must have an adjacent explicit rule/procedure heading and at
-    least two consecutive numbered or uniquely named operational items. Only
-    labelled initial declarations inside that heading belong to the block.
+    least two consecutive numbered, uniquely named or uniformly bulleted
+    operational items. Only labelled initial declarations inside that heading
+    belong to the block.
     Blank lines, narration, mixed or duplicate labels, numbering gaps and
     more than 24 items end or reject it. No source is followed, and no rule is
     executed or made active.

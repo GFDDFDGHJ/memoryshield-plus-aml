@@ -9,6 +9,8 @@ their original numeric or compact categorical type; a probability sample need
 not contain two separate numeric measurements to be a table.
 Schema declarations can precede or follow a block. A declared NA may occupy a
 numeric column; arbitrary prose and undeclared missing values stop the block.
+A pipe header's immediate original next-line Markdown alignment is retained
+as schema only when every cell and the column count match that header.
 Cross-session inheritance additionally requires the same explicit dataset ID,
 an explicit reference to an earlier schema, and one unambiguous prior schema.
 Source segment/record-sequence gaps, role/session changes and personal fields
@@ -27,6 +29,7 @@ _REFERENCE = re.compile(r"\b(?:earlier|previous|prior|shared|same|preceding)\b.{
 _DATASET = re.compile(r"\bdata[ _-]?set\s*(?P<marker>id|identifier|code)?\s*[:=#]?\s*[\"'`]?([A-Za-z0-9][A-Za-z0-9_.:/-]{2,63})|(?:数据集|資料集)(?:编号|标识)?\s*[:：=]?\s*([A-Za-z0-9][A-Za-z0-9_.:/-]{2,63})", re.I)
 _NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?(?:\s*[A-Za-zµμ°%][A-Za-z0-9µμ°%/^²³-]{0,12})?")
 _NOMINAL = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,31}")
+_MARKDOWN_ALIGNMENT_CELL = re.compile(r":?-{3,}:?")
 _MISSING = re.compile(r"\bmissing\b[^.!?\n]{0,100}\b(NA|N/A|NULL|NaN)\b|\b(NA|N/A|NULL|NaN)\b[^.!?\n]{0,80}\bmissing\b|缺失[^。！？\n]{0,40}\b(NA|N/A|NULL|NaN)\b", re.I)
 _UNIT = re.compile(r"\b(?:units?|pascals?|kilopascals?|seconds?|milliseconds?|kilograms?|grams?|metres?|meters?|litres?|liters?|volts?|amperes?|degrees?|kPa|MPa|Pa|ms|kg|mL)\b|单位|帕|毫秒|千克|毫升", re.I)
 _CONTROL = re.compile(r"^\s*(?:only|unless|provided|if|when|except|otherwise|do\s+not|never)\b|^\s*(?:仅|只有|除非|如果|当|否则|不要|不得|禁止)", re.I)
@@ -160,6 +163,45 @@ def _select_tables(units: list[dict], kept: set[int], *, private_categories=None
                              "ids": ids, "missing": set(),
                              "tokens": set().union(*(_tokens(column) for column in columns))})
 
+    alignment_spans = {}
+
+    def markdown_alignment(index, declaration):
+        """Recognize only a declared header's original next physical line.
+
+        An alignment row is source metadata, never a measurement or a reason
+        to skip an unknown sentence, empty line, removed segment or new turn.
+        """
+        header = declaration['index']
+        if (declaration['delimiter'] != '|' or index != header + 1
+                or source(index) != source(header) or not adjacent(header, index)):
+            return False
+        text = str(units[index].get('text', '')).strip()
+        if text.startswith('|'):
+            text = text[1:]
+        if text.endswith('|'):
+            text = text[:-1]
+        cells = [cell.strip() for cell in text.split('|')]
+        if (len(cells) != len(declaration['columns'])
+                or not all(_MARKDOWN_ALIGNMENT_CELL.fullmatch(cell) for cell in cells)):
+            return False
+        rid = source(index)
+        content = str(units[header].get('content', units[header].get('text', '')))
+        physical = bool(privacy and units[header].get('privacy_physical_rows'))
+        cache_key = (rid, physical)
+        if cache_key not in alignment_spans:
+            alignment_spans[cache_key] = ([(start, end) for start, end, _ in _physical_rows(content)]
+                if physical else dependency_layer.source_sentence_spans(content))
+        spans = alignment_spans[cache_key]
+        first, second = units[header]['segment'], units[index]['segment']
+        if not (0 <= first < len(spans) and 0 <= second < len(spans)):
+            return False
+        end, start = spans[first][1], spans[second][0]
+        while end > spans[first][0] and content[end-1].isspace():
+            end -= 1
+        while start < spans[second][1] and content[start].isspace():
+            start += 1
+        return bool(re.fullmatch(r'[\t ]*\r?\n[\t ]*', content[end:start]))
+
     def metadata(index, declaration):
         text = str(units[index].get("text", ""))
         if _PERSONAL.search(text) or not privacy and _sensitive_header(text):
@@ -168,6 +210,8 @@ def _select_tables(units: list[dict], kept: set[int], *, private_categories=None
         if ids:
             return bool(declaration["ids"] and ids <= declaration["ids"])
         if _DECLARATION.search(text) or _REFERENCE.search(text) or _columns(text, allow_sensitive=privacy) == (declaration["delimiter"], declaration["columns"]):
+            return True
+        if markdown_alignment(index, declaration):
             return True
         # A source may name its observations in one sentence and introduce
         # their columns in the very next one. Keep that explicit local subject

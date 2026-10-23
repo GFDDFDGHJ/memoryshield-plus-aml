@@ -954,6 +954,11 @@ class MemoryStore:
                 used += len(packed[protected]["content"])
                 protected += 1
             total_context = sum(map(len,digest_views+continuation_views))
+            if plan['task'] == 'global_synthesis':
+                # The preserved reading prefix also contains raw/rule blocks.
+                # Charge those actual bytes before deciding whether the
+                # disjoint source continuation needs the configured extension.
+                total_context = max(total_context, used + sum(map(len, continuation_views)))
             ceiling = 32000 if total_context <= 32000 else max(32000,min(160000,CONFIG.extended_context_chars))
             expanded = packed[:protected]
             seen = {_norm_text(row["content"]) for row in expanded}
