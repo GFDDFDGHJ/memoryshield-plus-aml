@@ -16,7 +16,7 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
-## v3.11.0: complete summary scope and qualified rule/state evidence
+## v3.11.1: complete summary scope and qualified rule/state evidence
 
 This medium update preserves the existing models, storage schema and public
 Add/Search routes. Development uses invented fixtures and temporary databases;
@@ -38,9 +38,17 @@ rather than generating answers or executing remembered instructions.
   expansion. General manner/feasibility headings retain their original words
   while scope classification keeps global response policies global. Ordinary
   Then/Next narration is not attached solely because its first word resembles
-  a verb. The same fixed 14 invented rule contracts improve from 5/14 to
-  14/14, including two complete Search checks with low-similarity rules and
+  a verb. The same fixed 17 invented rule contracts improve from 6/17 to
+  17/17, including complete Search checks with low-similarity rules and
   110 distracting sources. This is not arbitrary domain or rule inference.
+- The v3.11.1 patch distinguishes a response verb's bounded output manner
+  from a business domain introduced by "in". Explicit lengths, formats and
+  limited language forms keep their original text and global applicability;
+  finance, emergencies, named projects, technical-field complements and
+  request-trigger conditions remain local. A separate fixed 21-case check
+  improves from 11/21 to 21/21. Public verification includes the previously
+  omitted "Always reply in at most three sentences" policy under its general
+  manner heading. Unsupported free-form output descriptions remain conservative.
 - Unstructured English predicates no longer assert a negated complement such
   as a name of "not Eira" as a new positive value. Quoted literal values and
   explicit structured triples retain their original interpretation. An exact

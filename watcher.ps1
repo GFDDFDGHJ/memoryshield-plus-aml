@@ -18,7 +18,7 @@
 
 $dir = [IO.Path]::GetFullPath($PSScriptRoot)
 Set-Location $dir
-$expectedVersion = 'v3.11.0'
+$expectedVersion = 'v3.11.1'
 $expectedModel = 'text-embedding-v4'
 
 function Update-DashScopeEnvironment {

@@ -141,7 +141,7 @@ _QUESTION_EN = re.compile(r"\?$|^(what|how|why|when|where|who|which|is|are|do|do
 
 # First word that marks an instruction rather than a description.
 _EN_VERBS = frozenset(
-    "use keep reply respond answer write call avoid prefer include start end "
+    "use keep reply respond answer output write call avoid prefer include start end "
     "format return provide ensure make list explain summarize cite verify "
     "check confirm stop remember disclose protect retain mark omit redact specify "
     "separate report convert measure calculate validate quote".split()
@@ -1064,6 +1064,13 @@ _REQUEST_SCOPED_CONDITION = re.compile(
     r"\b(?:if|when|whenever)\s+(?:(?:I|we|you|the\s+user|users?)\s+"
     r"(?:(?:am|are|is)\s+)?(?:ask\w*|request\w*|quer\w*|mention\w*)\b"
     r"|(?:answering|responding|discussing|handling)\b|(?:the\s+)?(?:question|request|topic|prompt)\b)", re.I)
+_RESPONSE_MANNER_IN = re.compile(
+    r"\b(?:reply|respond|answer|output)\s+in\s+(?:"
+    r"(?:(?:at\s+most|no\s+more\s+than|up\s+to|exactly)\s+)?"
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a\s+single|single)\s+"
+    r"(?:words?|sentences?|lines?|paragraphs?|bullet\s+points?)"
+    r"|English|Spanish|JSON|YAML|XML|CSV|Markdown|plain\s+text|bullet\s+points|(?:a\s+)?(?:compact\s+)?table)"
+    r"(?=\s*(?:[.,;:!?]|$)|\s+(?:for|in|during|within|while)\s+)", re.I)
 
 
 def _global_response_rule(value: str, confidence: float = 1.0) -> bool:
@@ -1085,6 +1092,10 @@ def _global_response_rule(value: str, confidence: float = 1.0) -> bool:
     local_prefix = bool(re.match(r"\s*(?:for|in|during|within|while)\b|\s*(?:针对|在)", semantics, re.I))
     outer_response_scope = bool(re.match(r"\s*(?:for|in)\s+(?:all|every|each)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", semantics, re.I))
     domain_text = re.sub(r"\b(?:for|in)\s+(?:all|every|each|your|future|subsequent)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", " ", semantics, flags=re.I)
+    # A bounded output length/format is not a topical "in ..." domain.
+    # The phrase must follow a response verb and end at a clause boundary;
+    # e.g. "English literature" remains a domain. Quote text is untouched.
+    domain_text = _RESPONSE_MANNER_IN.sub(' ', domain_text)
     embedded_condition = bool(re.search(r"[,;]\s*(?:if|when|whenever)\b|(?:针对|用于)", domain_text, re.I))
     response_domain = bool(_RESPONSE_DOMAIN.search(domain_text)
                            or _REQUEST_SCOPED_CONDITION.search(domain_text))

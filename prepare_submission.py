@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parent
 def main():
     payloads = {name: (ROOT / name).read_bytes() for name in FILES}
     manifest = {
-        "version": "v3.11.0",
+        "version": "v3.11.1",
         "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
         "base_commit": "aed97db67b7dbd6d4d35678b4c0c609cf2050014",
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in payloads.items()},

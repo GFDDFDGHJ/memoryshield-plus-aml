@@ -135,6 +135,40 @@ class RuleExecutionBlockTests(unittest.TestCase):
                 self.assertIn('Always use metric units.', selected[0]['text'])
                 self.assertNotIn(sentence, selected[0]['text'])
 
+    def test_output_manner_in_is_global_without_an_explicit_response_noun(self):
+        sources = (
+            'For brevity:\nAlways reply in at most three sentences.',
+            'Always reply in two paragraphs.',
+            'Always reply in a single sentence.',
+            'Always answer in no more than 30 words.',
+            'Always reply in English.',
+            'Always respond in Spanish.',
+            'Always answer in JSON.',
+            'Always output in YAML.',
+            'Always reply in plain text.',
+            'Always reply in a compact table.',
+        )
+        for source in sources:
+            self.add(source)
+        selected = self.rules('What is my name now?')
+        self.assertEqual(len(selected), len(sources))
+        self.assertTrue(all(row['scope'] == 'global' for row in selected))
+        self.assertTrue(any('For brevity:' in row['text'] and 'at most three sentences.' in row['text']
+                            for row in selected))
+
+    def test_output_manner_does_not_erase_topical_in_or_later_request_scope(self):
+        for source in (
+            'Always reply in finance.', 'Always answer in emergencies.',
+            'Always respond in Juniper.', 'Always reply in a ceramics workshop.',
+            'Always reply in English literature.', 'Always answer in JSON engineering.',
+            'Always reply in English for Juniper invoice requests.',
+            'Always reply in JSON in emergencies.',
+            'For the Juniper invoice workflow only:\nAlways reply in at most three sentences.',
+            'Always reply in two paragraphs when I ask about finance.',
+        ):
+            self.add(source)
+        self.assertEqual(self.rules('What is my name now?'), [])
+
     def test_global_response_heading_and_ordinary_narration_remain_unchanged(self):
         self.add('For every future response:\nAlways cite a source.')
         self.add('Always use metric units. Then I visited the coastal museum. Next the weather became colder.')
@@ -193,6 +227,14 @@ class RuleBlockSearchTests(unittest.TestCase):
         self.assertTrue(result[0]['id'].startswith('rule_'))
         for literal in F._source_sentences(source):
             self.assertIn(literal, result[0]['content'])
+        self.assertEqual(result[0]['role'], 'user')
+
+    def test_brevity_qualification_and_limit_survive_complete_search(self):
+        self.add_low_ranked_rule('For brevity:\nAlways reply in at most three sentences.')
+        result = self.memory.search('target', 'What is my name now?', 100)
+        self.assertTrue(result[0]['id'].startswith('rule_'))
+        self.assertIn('For brevity:', result[0]['content'])
+        self.assertIn('Always reply in at most three sentences.', result[0]['content'])
         self.assertEqual(result[0]['role'], 'user')
 
 
