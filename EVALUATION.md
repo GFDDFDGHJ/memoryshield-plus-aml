@@ -16,6 +16,76 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## rc8: source qualifications and repeated-background pressure
+
+The new fixed diagnostics use invented conversations only. No official memory,
+questions, answer keys or raw evaluation traces were inspected. Embeddings,
+reranker, endpoint routes, authentication and database schema remain unchanged.
+
+Changes select and schedule original evidence rather than producing answers:
+
+- The topic-synthesis task from the query plan now reaches context selection
+  and continuation budgeting. A prior fixed project-history paraphrase improves
+  from 7/16 to 16/16 source markers; explicit and unknown-topic controls retain
+  their previous scope behavior.
+- Global sampling stably schedules lower-frequency literal sentences before
+  repeated background. Source RIDs are never merged. An original instance of
+  each global response policy is protected, using the same scope decision as
+  dedicated rule retrieval, so common instructions are not delayed by rarity.
+- `source_dependencies.py` selects explicit source-local qualifications for
+  topic views, raw previews and precise personal-property quotes. It preserves
+  registry outcomes, revocations, replacements and partial waivers; it does
+  not evaluate a condition, assign truth or create an updated fact. Links are
+  bounded to 24 added sentences, 512 sentence positions and four following
+  qualification sentences. Different entities, private fields and hypothetical
+  updates have independent negative controls.
+- Long ranking copies use bounded query-focused literal windows instead of
+  an indiscriminate prefix. Wire payloads remain within 3,500 UTF-8 bytes per
+  document and the existing weighted request ceiling. Returned evidence and
+  source attribution remain independent of these disposable ranking copies.
+
+| Fixed invented diagnostic | rc7 | rc8 |
+|---|---:|---:|
+| Thirty trajectory facts embedded in long sources, complete Search | 5/30 | 30/30 |
+| Complete domains with five trajectory stages | 0/6 | 6/6 |
+| Explicit state/qualification evidence contracts, 8k/16k/full | 7/12 | 12/12 |
+| Repeated numerical observations retained by distinct RID | 481/481 | 481/481 |
+| Existing extended-context contracts, full response | 8/8 | 8/8 |
+
+The embedded trajectory control still exposes only five claims at 8k/16k;
+its gain is complete-response coverage, not a claim about every prefix limit.
+All other eleven frozen progression views have no full-return loss. Several
+realistic handover/annual-review/narrative queries still miss synthesis intent;
+they remain disclosed failures rather than a reason to add scenario-specific
+trigger phrases. The repeated-observation control preserves 480 equal readings
+and one outlier. The common response-policy control remains visible at 8k,
+16k and full response after protecting policy dependencies.
+
+The unchanged 47-case evaluator with both cached real-v4 seeds retains every
+previous required literal, role, source-fidelity and rank check. Results remain
+42/47 strict scenarios, 291/306 required literals at 8k and 306/306 at 16k.
+These counts describe evidence, not the platform's generated answers.
+
+`evaluate_long_source_ranking.py` freezes six independent long-source cases
+and records both Store requests and the actual truncated client wire payload.
+Two tail-definition cases change from 0/4 and 0/5 visible wire inputs to 4/4
+and 5/5. Ten synthetic requests prepared real qwen3-rerank orders separately;
+offline replay shows one necessary source improving from rank 2 to 1. Do not
+attribute a general ranking gain to this small sample: complete evidence is
+3/6 with model ranks in both versions (4/6 under fallback dense ordering).
+One unusable execution-source excerpt moves from rank 1 to 11, while its
+necessary inputs are already absent in both versions. Long procedural
+descriptions and table-tail conversion/eligibility clauses still have failures.
+
+Fixture hashes:
+
+```text
+progression    f10ad3a2896f52ffa2273ffc12d9524b7f7a699bd16bd5c7dd4b33cd953d1bee
+state          892c0cb082bf4a180673afb8f02803ab1aa6aa4bdb6649697a561ed6e605c69c
+long ranking   78f998e338ccd5ac7226d36e71d97ffe0d7f75f40a7858a5d7abbcb8cee89aac
+priority       b05a3448435d9f41c8a1d48f07f204aa23c207520bcff23a33455777cb858a63
+```
+
 ## rc7: synthesis planning and semantic ranking
 
 rc7 adds a deterministic operation/scope/exclusion plan and an optional native

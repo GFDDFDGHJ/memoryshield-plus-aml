@@ -21,6 +21,9 @@ FILES = (
     "reranker.py", "query_plan.py", "test_reranker.py", "test_query_plan.py",
     "test_rerank_store.py", "evaluate_synthesis_intent.py", "evaluate_method_dependencies.py",
     "evaluate_rerank_replay.py",
+    "source_dependencies.py", "test_source_dependencies.py", "test_ranking_windows.py",
+    "evaluate_state_transitions.py", "evaluate_long_source_ranking.py",
+    "evaluate_synthesis_progression.py", "evaluate_global_priority_controls.py",
     "watcher.ps1", "run-watcher.cmd",
     "prepare_submission.py",
 )
@@ -30,7 +33,7 @@ ROOT = Path(__file__).resolve().parent
 def main():
     payloads = {name: (ROOT / name).read_bytes() for name in FILES}
     manifest = {
-        "version": "2026.10.22-rc7",
+        "version": "2026.10.23-rc8",
         "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
         "base_commit": "aed97db67b7dbd6d4d35678b4c0c609cf2050014",
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in payloads.items()},
@@ -39,7 +42,7 @@ def main():
     archive = ROOT / "submission-source.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for name, data in sorted({**payloads, "submission-manifest.json": manifest_bytes}.items()):
-            info = zipfile.ZipInfo(name, date_time=(2026, 10, 22, 0, 0, 0))
+            info = zipfile.ZipInfo(name, date_time=(2026, 10, 23, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             z.writestr(info, data)
     (ROOT / "submission-manifest.json").write_bytes(manifest_bytes)

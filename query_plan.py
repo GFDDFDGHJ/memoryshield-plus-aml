@@ -134,8 +134,9 @@ def plan(query: str) -> dict:
     """
     query = str(query or '')
     positive, excluded, spans = _separate_exclusions(query)
-    integrating = bool(_INTEGRATION.search(positive) or _THEMATIC_INQUIRY.search(positive)
-                       or _INTEGRATED_VIEW.search(positive) or _NOMINAL_INTEGRATION_QUESTION.search(positive))
+    operation_text = _QUOTED.sub(' ', positive)
+    integrating = bool(_INTEGRATION.search(operation_text) or _THEMATIC_INQUIRY.search(operation_text)
+                       or _INTEGRATED_VIEW.search(operation_text) or _NOMINAL_INTEGRATION_QUESTION.search(operation_text))
     facets = [name for name, pattern in _FACETS.items() if re.search(pattern, positive, re.I)]
     without_lead = re.sub(r'^\s*[A-Z][A-Za-z]*\b', ' ', positive)
     named = bool(re.search(r'\b[A-Z][A-Za-z0-9_-]{2,}\b', without_lead))

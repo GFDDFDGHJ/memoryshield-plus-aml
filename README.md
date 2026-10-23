@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **2026.10.22-rc7**. Repository:
+Candidate version: **2026.10.23-rc8**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -34,6 +34,16 @@ updated to the same version, then pass the official Smoke before Full.
   projects and single-domain summaries retain their topic bounds. A bounded
   prefix prioritizes explicit choices, changes and reasons; continuations carry
   the remaining selected original history.
+- Topic synthesis uses the same query plan in selection and budgeting. Global
+  context schedules less-repeated literal sentences before repeated background,
+  without merging observations. One original instance of each applicable global
+  response policy is protected before optional context; every source RID remains.
+- Source-local qualification links preserve explicit approval outcomes,
+  withdrawals, replacements and partial exemptions alongside their anchors.
+  Links select original sentences and never execute rules or assert a new state.
+- Long ranking copies use query-focused literal windows within the same byte
+  ceiling, including selected exceptions and schemas. They no longer depend
+  solely on the beginning of a long turn; raw source storage is unchanged.
 - Exact lookups prioritize relevant source evidence. A temporal restriction
   such as "before" does not globally reorder all results by insertion time.
   Explicit sequence requests include bounded neighboring turns in source order.
@@ -137,7 +147,7 @@ override it. See [Alibaba quota documentation](https://help.aliyun.com/zh/model-
 | `EMBEDDING_API_KEY` | Project secret or `DASHSCOPE_API_KEY` |
 | `AML_DB_PATH` | Project-local `aml_text_v4.db` |
 | `AML_AUTH_TOKEN` | `.secrets/aml_auth_token.txt` |
-| `AML_VERSION` | `2026.10.22-rc7` |
+| `AML_VERSION` | `2026.10.23-rc8` |
 | `AML_RERANK` | `false`; watcher enables `true` |
 | `AML_RERANK_MODEL` | `qwen3-rerank` |
 | `AML_RERANK_API_KEY` | Embedding key |
@@ -250,7 +260,7 @@ tunnel names change after restarts and require updating the AML API binding.
 
 This Windows deployment keeps the existing public origin
 `https://hlq5070.tail50f4d4.ts.net` and the same `/add` and `/search` paths.
-`watcher.ps1` supervises the rc7 API. It pins Beijing `text-embedding-v4`, 1024
+`watcher.ps1` supervises the rc8 API. It pins Beijing `text-embedding-v4`, 1024
 dimensions, and `aml_text_v4.db`; health probes verify version and model. A
 lifetime file lock prevents duplicate supervisors. Launch the watcher outside
 the interactive tool process; the current host uses `Win32_Process.Create`.

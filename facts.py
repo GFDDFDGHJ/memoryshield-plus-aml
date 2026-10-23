@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 import evidence_links as link_layer
 import query_plan as query_layer
+import source_dependencies as dependency_layer
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -842,6 +844,23 @@ _RESPONSE_SCOPE = re.compile(r"\b(?:all|every|each|your|future|subsequent)\s+(?:
 _OUTPUT_POLICY = re.compile(r"\b(?:repl\w*|respond\w*|answer\w*|output\w*|format\w*|language|tone|sentences?|headings?|units?|metric|cit\w*|sources?|uncertainty|confidence|assumptions?|dates?|privacy|private|addresses?|redact\w*)\b|回答|回复|输出|格式|语言|单位|引用|来源|置信|隐私|地址",re.I)
 
 
+def _global_response_rule(value: str, confidence: float = 1.0) -> bool:
+    """One scope decision for dedicated rules and global context protection."""
+    semantics = re.sub(r'^\s*(?:[-*\u2022]|\d+[.)])\s+', '', value)
+    if confidence < .6 or not _GLOBAL_RULE.search(semantics):
+        return False
+    explicit_response = bool(_RESPONSE_SCOPE.search(semantics))
+    conditional_rule = bool(re.match(r"\s*(?:if|when|whenever)\b|\s*(?:如果|当|若)", semantics, re.I))
+    local_prefix = bool(re.match(r"\s*(?:for|in|during|within|while)\b|\s*(?:针对|在)", semantics, re.I))
+    outer_response_scope = bool(re.match(r"\s*for\s+(?:all|every|each)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", semantics, re.I))
+    domain_text = re.sub(r"\b(?:for|in)\s+(?:all|every|each|your|future|subsequent)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", " ", semantics, flags=re.I)
+    embedded_condition = bool(re.search(r"[,;]\s*(?:if|when|whenever)\b|(?:针对|用于)", domain_text, re.I))
+    local_domain = bool(_LOCAL_RULE.search(domain_text)) and not explicit_response
+    return (not conditional_rule and not embedded_condition
+            and (not local_prefix or outer_response_scope) and not local_domain
+            and (explicit_response or bool(_OUTPUT_POLICY.search(semantics))))
+
+
 def relevant_rules(
     conn: sqlite3.Connection, user_id: str, query: str, limit: int = 4,
 ) -> list[dict]:
@@ -878,23 +897,7 @@ def relevant_rules(
     for row in rows:
         value = _complete_source_rule(conn, row, has_items)
         overlap = len(q & _tokens(value + " " + row["predicate"]))
-        semantics = re.sub(r'^\s*(?:[-*\u2022]|\d+[.)])\s+', '', value)
-        explicit_response = bool(_RESPONSE_SCOPE.search(semantics))
-        conditional_rule = bool(re.match(r"\s*(?:if|when|whenever)\b|\s*(?:如果|当|若)",semantics,re.I))
-        local_prefix = bool(re.match(r"\s*(?:for|in|during|within|while)\b|\s*(?:针对|在)",semantics,re.I))
-        outer_response_scope = bool(re.match(r"\s*for\s+(?:all|every|each)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b",semantics,re.I))
-        domain_text = re.sub(r"\b(?:for|in)\s+(?:all|every|each|your|future|subsequent)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", " ", semantics, flags=re.I)
-        # 'in Spanish' or 'in a compact table' specifies the output manner,
-        # while a leading 'For the invoice task' scopes the whole directive.
-        # An explicit universal response object can carry such a manner, but
-        # cannot override an outer local scope or a subordinate condition.
-        embedded_condition = bool(re.search(r"[,;]\s*(?:if|when|whenever)\b|(?:针对|用于)",domain_text,re.I))
-        local_domain = bool(_LOCAL_RULE.search(domain_text)) and not explicit_response
-        global_rule = (bool(_GLOBAL_RULE.search(semantics)) and not conditional_rule and not embedded_condition
-                       and (not local_prefix or outer_response_scope)
-                       and not local_domain
-                       and (explicit_response or bool(_OUTPUT_POLICY.search(semantics)))
-                       and row["confidence"] >= .6)
+        global_rule = _global_response_rule(value, row['confidence'])
         if not overlap and not global_rule and (not asks_all_rules or row["confidence"] < 0.6):
             continue
         score = overlap / max(1.0, len(q) ** 0.5) + (0.15 if asks_rules else 0.0) + (.2 if global_rule else 0)
@@ -1407,7 +1410,8 @@ def context_scope(query: str) -> tuple[str, set[str]]:
     if plan["task"] == "global_synthesis":
         return "global", set()
     topics = _context_tokens(query)
-    requested = bool(_CONTEXT_REQUEST.search(query) or _AGGREGATE_QUERY.search(query)
+    requested = bool(plan['task'] == 'topic_synthesis'
+                     or _CONTEXT_REQUEST.search(query) or _AGGREGATE_QUERY.search(query)
                      or _MEMORY_REFERENCE.search(query) and _OVERVIEW_ABSTRACTION.search(query))
     if not requested:
         return "ordinary", topics
@@ -1801,6 +1805,13 @@ def _pack_context(
     else:
         salient = []
     priority = list(dict.fromkeys(index for index in salient + endpoints + priority if index not in required))
+    if scope == 'global':
+        # Repeated background can fill a whole continuation before a new
+        # statement buried in a later turn is visited. This changes scheduling
+        # only: equal wordings remain separate observations and keep their RIDs.
+        # Stable sorting preserves the existing fair/salient order on ties.
+        repetitions = Counter(unit['text'] for unit in units)
+        priority.sort(key=lambda index: repetitions[units[index]['text']])
     # A bounded prefix also needs cross-source coverage. Render a sampled
     # global view in the same fair source order used to select it, rather than
     # sorting it back into one long topic's chronological block. Sequence
@@ -2030,6 +2041,7 @@ def context_units_for_query(rows, query: str) -> list[dict]:
     context_request = scope != "ordinary"
     global_scope = scope == "global"
     units, scores = [], {}
+    protected_policies = set()
     non_temporal_topics = topics - _TEMPORAL_TOPIC
     temporal_metadata_only = bool(_TEMPORAL_QUERY.search(query)) and not non_temporal_topics
     for row in rows:
@@ -2043,6 +2055,10 @@ def context_units_for_query(rows, query: str) -> list[dict]:
             unit.update(source_rid=row["rid"], segment=segment, text=sentence, overlap=overlap)
             if global_scope:
                 unit['context_salient'] = bool(_SYNTHESIS_SALIENCE.search(sentence))
+                if (row.get('role') in {'user', 'system'} and sentence not in protected_policies
+                        and _global_response_rule(sentence)):
+                    unit['context_dependency'] = True
+                    protected_policies.add(sentence)
             units.append(unit)
             scores[row["session_id"]] = max(scores.get(row["session_id"], 0), overlap)
     if not global_scope:
@@ -2079,6 +2095,12 @@ def context_units_for_query(rows, query: str) -> list[dict]:
             # This does not extend a topic to arbitrary numeric personal turns.
             source_rows={unit["source_rid"]:[] for unit in units}
             for index,unit in enumerate(units): source_rows[unit["source_rid"]].append(index)
+            for indexes in source_rows.values():
+                local_anchors = {offset for offset, index in enumerate(indexes) if index in kept}
+                if local_anchors:
+                    dependencies = dependency_layer.dependency_indexes(
+                        [units[index]['text'] for index in indexes], local_anchors)
+                    kept.update(indexes[offset] for offset in dependencies)
             table_row=lambda text: bool(re.search(r"[|\t]|[,;].*[,;]",text))
             for indexes in source_rows.values():
                 runs,run=[],[]

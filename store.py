@@ -38,6 +38,7 @@ from openai import OpenAI
 import facts as fact_layer
 import evidence_links as link_layer
 import query_plan as query_layer
+import source_dependencies as dependency_layer
 from reranker import (RerankerClient, MAX_QUERY_BYTES, MAX_DOCUMENT_BYTES,
                       MAX_WEIGHTED_INPUT_BYTES)
 from config import CONFIG
@@ -284,6 +285,18 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
     covered = tokens & fact_layer._tokens(opening)
     remaining = budget - len(opening) - (35 if opening else 0)
     blocked_chain = False
+    if opening:
+        dependencies = dependency_layer.dependency_indexes(units, {0})
+        needed = sum(len(units[index]) + 35 for index in dependencies)
+        if needed <= remaining:
+            selected.extend((locations[index], units[index], index) for index in sorted(dependencies))
+            remaining -= needed
+            for index in dependencies:
+                covered |= tokens & fact_layer._tokens(units[index])
+        elif dependencies:
+            selected = []
+            remaining = budget
+            blocked_chain = True
     def table_header(unit: int) -> int | None:
         """Retain the schema of a literal pipe/TSV/CSV numeric row."""
         row = units[unit].strip().strip("|")
@@ -348,6 +361,10 @@ def _query_preview(text: str, query: str, budget: int = 3000) -> str:
             if not any(previous[2] == following for previous in selected):
                 context.append((locations[following], units[following], following))
             following += 1
+        existing_context = {index for _, _, index in context} | {index for _, _, index in selected}
+        for index in sorted(dependency_layer.dependency_indexes(units, {unit})):
+            if index not in existing_context:
+                context.append((locations[index], units[index], index))
         needed = len(piece) + 35 + sum(len(line) + 35 for _, line, _ in context)
         if needed > remaining:
             blocked_chain = blocked_chain or bool(context)
@@ -378,6 +395,28 @@ class _DatabaseConnection(sqlite3.Connection):
             return super().__exit__(exc_type, exc_value, traceback)
         finally:
             self.close()
+
+
+def _ranking_document(query: str, row) -> str:
+    """Give the ranker literal query windows instead of a blind long prefix.
+
+    This representation is disposable. The source row, returned quotations and
+    source chronology are unchanged. Exception/protocol/schema dependencies
+    share the existing all-or-explicitly-incomplete preview rules.
+    """
+    header = f"[speaker role={row['role']}]\n"
+    content = row['content']
+    if len((header + content).encode('utf-8')) <= MAX_DOCUMENT_BYTES:
+        return header + content
+    header += "[QUERY-FOCUSED RANKING EXCERPTS; source text omitted]\n"
+    allowance = MAX_DOCUMENT_BYTES - len(header.encode('utf-8'))
+    for budget in (min(3000, allowance), 2000, 1200, 800, 400):
+        preview = _query_preview(content, query, budget=budget)
+        if len(preview.encode('utf-8')) <= allowance:
+            return header + preview
+    # The preview's incompleteness notice is bounded even if an individual
+    # paragraph is indivisible; avoid byte-cutting an apparently complete rule.
+    return header + "[INCOMPLETE EVIDENCE: selected source spans exceed the ranking budget.]"
 
 
 class AddRequestConflict(ValueError):
@@ -903,6 +942,7 @@ class MemoryStore:
                         / math.sqrt(max(1, len(tokens[pair[1]["rid"]]))), reverse=True)
         selected_ids = set()
         weighted_size = 0
+        ranking_documents = {}
         query_size = min(MAX_QUERY_BYTES, len(query.encode("utf-8")))
         # Interleave recall paths before applying the provider input ceiling;
         # trimming a long pool must not remove every sparse-only candidate.
@@ -912,16 +952,17 @@ class MemoryStore:
                 break
             if pair[1]["rid"] in selected_ids:
                 continue
-            document = f"[speaker role={pair[1]['role']}]\n{pair[1]['content']}"
-            needed = query_size + min(MAX_DOCUMENT_BYTES, len(document.encode("utf-8")))
+            document = _ranking_document(query, pair[1])
+            needed = query_size + len(document.encode("utf-8"))
             if weighted_size + needed > MAX_WEIGHTED_INPUT_BYTES:
                 break
             head.append(pair)
             selected_ids.add(pair[1]["rid"])
+            ranking_documents[pair[1]['rid']] = document
             weighted_size += needed
         if len(head) < 2:
             return ranked
-        documents = [f"[speaker role={row['role']}]\n{row['content']}" for _, row in head]
+        documents = [ranking_documents[row['rid']] for _, row in head]
         try:
             order = client.rerank(query, documents)
             if (not isinstance(order, list) or len(order) != len(head)
@@ -1041,6 +1082,7 @@ class MemoryStore:
                             unresolved.append(sentence)
                 if matched_indexes:
                     retained_indexes = set(matched_indexes)
+                    retained_indexes.update(dependency_layer.dependency_indexes(sentences, matched_indexes))
                     for index in matched_indexes:
                         previous = index - 1
                         while previous >= 0 and fact_layer._CONTEXT_QUALIFIER.search(sentences[previous].strip()):
