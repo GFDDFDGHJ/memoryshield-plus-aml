@@ -226,6 +226,211 @@ class ContextDataTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             D.expand(units, {0})
 
+    def test_one_numeric_measurement_column_is_a_complete_declared_table(self):
+        for columns, rows in (
+            ('sample | outcome | exposure', [f'T{i:03d} | pass | {10+i}' for i in range(8)]),
+            ('sample | pressure', [f'T{i:03d} | {10+i}' for i in range(8)]),
+            ('sample | offset', [f'T{i:03d} | {-1.5+i*0.1:.2e}' for i in range(8)]),
+        ):
+            with self.subTest(columns=columns):
+                units, groups = self.make([['Rivel experiment columns:', columns]] + [[row] for row in rows])
+                original = copy.deepcopy(units)
+                extra, schema = D.expand(units, {0})
+                self.assertTrue({group[0] for group in groups[1:]} <= extra)
+                self.assertEqual(schema, set(groups[0]))
+                self.assertEqual(units, original)
+
+    def test_categorical_outcomes_keep_each_original_observation(self):
+        units, groups = self.make([['Rivel experiment columns:', 'sample | outcome | condition']] +
+                                 [[f'T{i:03d} | {"pass" if i % 4 else "fail"} | cold'] for i in range(8)])
+        extra, _ = D.expand(units, {0})
+        self.assertTrue({group[0] for group in groups[1:]} <= extra)
+
+    def test_named_observation_subject_attaches_to_immediate_column_declaration(self):
+        for columns, rows in (
+            ('sample | outcome | exposure', [f'T{i:03d} | pass | {10+i}' for i in range(8)]),
+            ('sample | outcome | condition', [f'T{i:03d} | pass | cold' for i in range(8)]),
+        ):
+            with self.subTest(columns=columns):
+                units, groups = self.make([['Rivel observations.', 'Columns:', columns]] + [[row] for row in rows])
+                extra, schema = D.expand(units, {0})
+                self.assertTrue({group[0] for group in groups[1:]} <= extra)
+                self.assertEqual(schema, set(groups[0]))
+
+    def test_unrelated_same_source_sentence_is_not_the_tables_subject(self):
+        units, _ = self.make([['The garden plan uses gravel and seedlings.', 'Columns:',
+                              'sample | outcome | condition']] +
+                            [[f'T{i:03d} | pass | cold'] for i in range(8)])
+        self.assertEqual(D.expand(units, {0}), (set(), set()))
+
+    def test_hidden_gap_blocks_observation_subject_from_schema(self):
+        units, _ = self.make([['Rivel observations.', 'My private address is PRIVATE-ADDRESS-382.',
+                              'Columns:', 'sample | outcome | condition']] +
+                            [[f'T{i:03d} | pass | cold'] for i in range(8)])
+        filtered = [unit for unit in units if 'PRIVATE-ADDRESS' not in unit['text']]
+        self.assertEqual(D.expand(filtered, {0}), (set(), set()))
+
+    def test_identical_categorical_records_remain_distinct_original_rows(self):
+        units, groups = self.make([['Rivel experiment columns:', 'outcome | condition']] +
+                                 [['pass | cold'] for _ in range(8)])
+        extra, _ = D.expand(units, {0})
+        self.assertEqual(len({units[index]['source_rid'] for index in extra if index not in groups[0]}), 8)
+
+    def test_categorical_footer_declaration_closes_preceding_rows(self):
+        units, groups = self.make([[f'T{i:03d} | pass | cold'] for i in range(8)] +
+                                 [['Rivel experiment columns:', 'sample | outcome | condition']])
+        extra, _ = D.expand(units, {groups[-1][0]})
+        self.assertTrue({group[0] for group in groups[:-1]} <= extra)
+
+    def test_categorical_table_still_requires_explicit_column_declaration(self):
+        units, _ = self.make([['Rivel experiment.'], ['sample | outcome | condition']] +
+                            [[f'T{i:03d} | pass | cold'] for i in range(8)])
+        self.assertEqual(D.expand(units, {0}), (set(), set()))
+
+    def test_two_categorical_rows_cannot_create_a_table(self):
+        units, _ = self.make([['Rivel experiment columns:', 'sample | outcome | condition']] +
+                            [[f'T{i:03d} | pass | cold'] for i in range(2)])
+        self.assertEqual(D.expand(units, {0}), (set(), set()))
+
+    def test_categorical_rows_do_not_cross_role_or_new_topic_boundary(self):
+        for boundary in ({'parts': ['T003 | pass | cold'], 'role': 'assistant'},
+                         ['A new gardening topic begins here.']):
+            with self.subTest(boundary=boundary):
+                units, groups = self.make([['Rivel experiment columns:', 'sample | outcome | condition']] +
+                    [[f'T{i:03d} | pass | cold'] for i in range(3)] + [boundary] +
+                    [[f'T{i:03d} | pass | cold'] for i in range(4,8)])
+                extra, _ = D.expand(units, {0})
+                self.assertTrue({groups[i][0] for i in (1,2,3)} <= extra)
+                self.assertFalse({group[0] for group in groups[4:]} & extra)
+
+    def test_categorical_rows_do_not_cross_removed_private_record(self):
+        units, groups = self.make([['Rivel experiment columns:', 'sample | outcome | condition']] +
+            [[f'T{i:03d} | pass | cold'] for i in range(3)] + [['My private address is PRIVATE-ADDRESS-382.']] +
+            [[f'T{i:03d} | pass | cold'] for i in range(4,8)])
+        filtered = [unit for i, unit in enumerate(units) if i not in groups[4]]
+        extra, _ = D.expand(filtered, {0})
+        self.assertFalse(any('T004' in filtered[index]['text'] for index in extra))
+
+    def test_categorical_table_does_not_associate_sensitive_field_schema(self):
+        units, _ = self.make([['Rivel experiment columns:', 'sample | phone | outcome']] +
+                            [[f'T{i:03d} | PRIVATE-PHONE-{i} | pass'] for i in range(8)])
+        self.assertEqual(D.expand(units, {0}), (set(), set()))
+
+    def test_single_measurement_missing_cell_keeps_declared_numeric_mask(self):
+        units, groups = self.make([['Rivel experiment columns:', 'sample | pressure',
+                                   'Missing pressure is written NA.']] +
+            [[f'T{i:03d} | {"NA" if i == 4 else str(10+i)}'] for i in range(8)])
+        extra, _ = D.expand(units, {0})
+        self.assertTrue({group[0] for group in groups[1:]} <= extra)
+
+    def test_categorical_missing_marker_does_not_invent_its_column_type(self):
+        units, groups = self.make([['Rivel experiment columns:', 'sample | outcome | condition',
+                                   'Missing outcome is written NA.']] +
+            [[f'T{i:03d} | {"NA" if i == 4 else "pass"} | cold'] for i in range(8)])
+        extra, _ = D.expand(units, {0})
+        self.assertFalse({group[0] for group in groups[5:]} & extra)
+
+    def test_explicit_private_column_exclusions_withhold_original_table_indexes(self):
+        for header, category, row in (
+            ('name | condition | outcome', 'name', 'Invented Person | cold | pass'),
+            ('passport_number | condition | outcome', 'identity', 'ZZ-907 123 | cold | pass'),
+            ('government-id | condition | outcome', 'identity', 'ZZ-907 123 | cold | pass'),
+            ('phone_number | condition | outcome', 'phone', '+1 (212) 555-0198 | cold | pass'),
+            ('postal_address | condition | outcome', 'address', '47 Invented Fern Lane | cold | pass'),
+            ('patient_diagnosis | condition | outcome', 'medical', 'invented shoulder sprain | cold | pass'),
+        ):
+            with self.subTest(header=header):
+                units, _ = self.make([['Rivel observation columns:', header]] + [[row] for _ in range(8)])
+                original = copy.deepcopy(units)
+                self.assertEqual(D.excluded_table_indexes(units, [category]), set(range(len(units))))
+                self.assertEqual(units, original)
+
+    def test_one_private_table_row_is_withheld_without_a_sample_minimum(self):
+        units, _ = self.make([['Rivel observation columns:', 'name | outcome'], ['Invented Person | pass']])
+        self.assertEqual(D.excluded_table_indexes(units, ['name']), set(range(len(units))))
+
+    def test_private_value_shape_and_missing_cells_cannot_end_privacy_scope(self):
+        units, _ = self.make([['Rivel observation columns:', 'name | condition | outcome'],
+                            [' | cold | pass'], ['My | cold | pass'], ['A' * 700 + ' | cold | pass'],
+                            ['Later Person | cold | pass']])
+        self.assertEqual(D.excluded_table_indexes(units, ['name']), set(range(len(units))))
+
+    def test_quoted_csv_private_values_are_withheld_without_rewriting(self):
+        units, _ = self.make([['Rivel observation columns:', 'name,condition,outcome'],
+                            ['"Invented, Person",cold,pass'], ['"Another, Person",warm,fail']])
+        original = copy.deepcopy(units)
+        self.assertEqual(D.excluded_table_indexes(units, ['name']), set(range(len(units))))
+        self.assertEqual(units, original)
+
+    def test_numbered_private_rows_share_the_callers_source_segment_boundaries(self):
+        units, _ = self.make([['Rivel observation columns:', 'name | condition | outcome']] +
+                            [[f'{index}. Invented Person | cold | pass'] for index in range(1, 5)])
+        self.assertEqual(D.excluded_table_indexes(units, ['name']), set(range(len(units))))
+        self.assertEqual(D._segments('1. Invented Person | cold | pass\n'),
+                         ['1. Invented Person | cold | pass'])
+
+    def test_privacy_physical_rows_keep_periods_inside_csv_and_pipe_values(self):
+        for header, first, following in (
+            ('name,condition,outcome', '"Dr. Vera Mallow",cold,pass', '"Prof. Invented Person",warm,fail'),
+            ('name | condition | outcome', 'Dr. Vera Mallow | cold | pass', 'Prof. Invented Person | warm | fail'),
+        ):
+            with self.subTest(header=header):
+                records = [dict(rid=1, seq=1, user_id='u', role='user', session_id='bench',
+                                content='Mallow observation columns:\n' + header),
+                           dict(rid=2, seq=2, user_id='u', role='user', session_id='bench', content=first),
+                           dict(rid=3, seq=3, user_id='u', role='user', session_id='bench', content=following)]
+                original = copy.deepcopy(records)
+                spans = D.excluded_source_spans(records, ['name'])
+                self.assertEqual(set(spans), {1,2,3})
+                self.assertEqual(spans[2], [(0, len(first))])
+                self.assertEqual(spans[3], [(0, len(following))])
+                self.assertEqual(records, original)
+
+    def test_privacy_physical_blank_line_stops_before_later_anonymous_rows(self):
+        source = 'Mallow observation columns:\nname | condition | outcome\nDr. Vera Mallow | cold | pass\n\nLater Person | warm | fail'
+        rows = [dict(rid=1, seq=1, user_id='u', role='user', session_id='bench', content=source)]
+        selected = '\n'.join(source[start:end] for start,end in D.excluded_source_spans(rows,['name'])[1])
+        self.assertIn('Dr. Vera Mallow', selected)
+        self.assertNotIn('Later Person', selected)
+
+    def test_private_row_terminal_period_does_not_withhold_the_next_safe_sentence(self):
+        import facts as F
+        source = ('Mallow observation columns:\nname | condition | outcome\n'
+                  'Dr. Vera Mallow | cold | pass.\nMallow calibration uses sealed chambers.')
+        rows = [dict(rid=1, seq=1, user_id='u', role='user', session_id='bench', content=source)]
+        withheld = F.excluded_table_segments(rows, ['name'])
+        sentences = F._source_sentences(source)
+        self.assertTrue(all(index in withheld[1] for index in range(len(sentences)-1)))
+        self.assertNotIn(len(sentences)-1, withheld[1])
+
+    def test_private_table_scope_stops_at_role_session_and_dataset_boundaries(self):
+        for boundary in (
+            {'parts': ['Other Person | cold | pass'], 'role': 'assistant'},
+            {'parts': ['Other Person | cold | pass'], 'session': 'other'},
+            ['Dataset ID DS-OTHER-53.'],
+            ['A new gardening topic starts here.'],
+        ):
+            with self.subTest(boundary=boundary):
+                units, groups = self.make([['Rivel observation columns:', 'name | condition | outcome'],
+                    ['Invented Person | cold | pass'], boundary, ['Later Person | cold | pass']])
+                withheld = D.excluded_table_indexes(units, ['name'])
+                self.assertTrue(set(groups[0] + groups[1]) <= withheld)
+                self.assertFalse(set(groups[2] + groups[3]) & withheld)
+
+    def test_normalized_sensitive_schema_does_not_qualify_for_ordinary_table_expansion(self):
+        for field in ('phone_number', 'patient_diagnosis', 'postal_address', 'passport_number', 'national-id'):
+            with self.subTest(field=field):
+                units, _ = self.make([['Rivel observation columns:', field + ' | condition | outcome']] +
+                                    [['PRIVATE-VALUE | cold | pass'] for _ in range(8)])
+                self.assertEqual(D.expand(units, {0}), (set(), set()))
+
+    def test_technical_sample_name_is_retained_without_name_exclusion(self):
+        units, _ = self.make([['Rivel observation columns:', 'sample_name | condition | outcome']] +
+                            [[f'Q{i:03d} | cold | pass'] for i in range(8)])
+        self.assertTrue(D.expand(units, {0})[0])
+        self.assertEqual(D.excluded_table_indexes(units, []), set())
+        self.assertEqual(D.excluded_table_indexes(units, ['address']), set())
+
 
 if __name__ == "__main__":
     unittest.main()

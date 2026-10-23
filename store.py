@@ -969,8 +969,14 @@ class MemoryStore:
             packed = expanded
         exclusions = query_layer.plan(query)["excluded_categories"]
         if exclusions:
+            source_rows = conn.execute(
+                "SELECT rid,user_id,session_id,role,content,created_at,seq,timestamp_origin FROM items"
+                " WHERE user_id=? AND status='active' ORDER BY seq,rid", (user_id,),
+            ).fetchall()
+            private_tables = fact_layer.excluded_table_segments(source_rows, exclusions)
             packed = [evidence for evidence in packed
-                      if not query_layer.excluded_text(evidence["content"], exclusions)]
+                      if evidence.get('source_rid') not in private_tables
+                      and not query_layer.excluded_text(evidence["content"], exclusions)]
         return packed
 
     @staticmethod
@@ -1074,7 +1080,13 @@ class MemoryStore:
         ).fetchall()
         exclusions = query_layer.plan(query)["excluded_categories"]
         if exclusions:
-            rows = [row for row in rows if not query_layer.excluded_text(row["content"], exclusions)]
+            private_tables = fact_layer.excluded_table_segments(rows, exclusions)
+            # Anonymous cell values have their field meaning in an earlier
+            # schema. Withhold their source before ranking and raw rescue;
+            # sentence-level assignment matching cannot identify these cells.
+            # Compact views can still quote safe sentences in a mixed source.
+            rows = [row for row in rows if row['rid'] not in private_tables
+                    and not query_layer.excluded_text(row["content"], exclusions)]
         query = query_layer.plan(query)["positive_query"]
         if exclusions and not query.strip():
             return []

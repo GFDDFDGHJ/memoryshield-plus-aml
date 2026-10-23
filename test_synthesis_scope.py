@@ -17,6 +17,9 @@ POSITIVE = (
     'Summarize what you remember about me.',
     'Summarize everything you know about me.',
     'Give me a summary of what you have learned about myself.',
+    # A complete question about remembered self information supplies the
+    # same scope as "Summarize what you remember about me".
+    'What do you remember about me?',
     'Summarize who I am.',
     '总结我的经历。',
     '请回顾一下我的过往。',
@@ -57,7 +60,9 @@ NEGATIVE = (
     'Please do not summarize myself.',
     'Explain why the command summarize my history was rejected.',
     'Does “summarize my memories” refer to the kiln?',
-    'What do you remember about me?',
+    'What do you remember about me from the pottery guild?',
+    'What do you remember about me, and only discuss work?',
+    'Did I ask what you remember about me?',
     'Tell me about myself.',
     'Which history did I summarize?',
     'I need a protocol for summarizing memories.',
@@ -119,13 +124,18 @@ class SynthesisScopeTests(unittest.TestCase):
                     'My home address is 41 Invented Marsh Lane.',
                     'My storage access code is INVENTED-5092.',
                 ))]
-        query = 'Summarize my history, omitting my home address and access code.'
-        units = F.context_units_for_query(rows, query)
-        text = '\n'.join(unit['text'] for unit in units)
-        self.assertIn('ferry stopped running', text)
-        self.assertIn('quiet clay bowls', text)
-        self.assertNotIn('41 Invented Marsh Lane', text)
-        self.assertNotIn('INVENTED-5092', text)
+        for query in (
+            'Summarize my history, omitting my home address and access code.',
+            'What have you learned about me from all our conversations, omitting my home address and access code?',
+            'What do you remember about me as a person, omitting my home address and access code?',
+        ):
+            with self.subTest(query=query):
+                units = F.context_units_for_query(rows, query)
+                text = '\n'.join(unit['text'] for unit in units)
+                self.assertIn('ferry stopped running', text)
+                self.assertIn('quiet clay bowls', text)
+                self.assertNotIn('41 Invented Marsh Lane', text)
+                self.assertNotIn('INVENTED-5092', text)
         for query in ('Summarize my history about an unknown hatchery.',
                       'Summarize my memories of an unknown hatchery.'):
             with self.subTest(query=query):

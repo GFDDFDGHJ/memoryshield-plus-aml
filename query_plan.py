@@ -155,6 +155,49 @@ _COMPLETE_MEMORY_SUMMARY = re.compile(
     r'|(?:我|我们)是怎样的人|我自己|我们自己)\s*[。！？.!?]*\s*$', re.I,
 )
 
+# A whole-person memory inquiry is also an integration operation. Match its
+# complete object, rather than treating a word such as "learned" as a global
+# trigger: "what have you learned about my work on a kiln" still has a domain.
+# Source clauses are grammatical references to the conversation as a whole;
+# they cannot swallow a name, quoted object, exclusion, or arbitrary topic.
+_WHOLE_HISTORY_REFERENCE = (
+    r'(?:(?:all\s+(?:of\s+)?)?(?:my|our|the)\s+'
+    r'(?:(?:past|previous|earlier|shared|whole|entire|complete|full)\s+)*'
+    r'(?:history|conversations|chats|discussions|exchanges|experiences|memories)'
+    r'|everything\s+(?:I|we)\s+(?:(?:have|had)\s+)?'
+    r'(?:discussed|shared|told\s+you|talked\s+about))'
+)
+_WHOLE_PERSON_OBJECT = r'(?:me|us|myself|ourselves)(?:\s+as\s+(?:a\s+person|people))?'
+_WHOLE_PERSON_INQUIRY = (
+    r'(?:what\s+(?:(?:do|did)\s+you\s+(?:know|remember)|'
+    r'have\s+you\s+(?:learned|learnt|remembered))\s+about\s+'
+    + _WHOLE_PERSON_OBJECT +
+    r'|what\s+(?:kind|sort)\s+of\s+(?:person\s+am\s+I|people\s+are\s+we)'
+    r'|what\s+(?:matters\s+most|is\s+important)\s+to\s+(?:me|us)'
+    r'|how\s+would\s+you\s+describe\s+' + _WHOLE_PERSON_OBJECT +
+    r'(?:\s+to\s+someone\s+who\s+has\s+never\s+met\s+(?:me|us))?'
+    r'|what\s+(?:have\s+(?:I|we)|did\s+(?:I|we))\s+'
+    r'(?:talked\s+about|discussed|shared))'
+)
+_WHOLE_HISTORY_CN = (
+    # "我们的" can also tokenize as "我们" + "的". Choose a token once,
+    # longest first, so an unrecognized following topic cannot cause an
+    # exponential search over equivalent source-reference tokenizations.
+    r'(?:(?>我们的|我们|我的|之前|以前|以往|过去|所有|全部|历次|'
+    r'聊过的|说过的|讨论过的|分享过的|的|对话|聊天|交流|经历|事情|内容)+)'
+)
+_COMPLETE_PERSON_INQUIRY = re.compile(
+    r'^\s*(?:(?:based\s+on|considering|from|judging\s+from)\s+'
+    + _WHOLE_HISTORY_REFERENCE + r'\s*[,;]?\s+)?'
+    + _WHOLE_PERSON_INQUIRY +
+    r'(?:\s+(?:from|based\s+on|through|across)\s+' + _WHOLE_HISTORY_REFERENCE + r')?'
+    + _SUMMARY_TAIL + r'\s*[.!?。！？]*\s*$'
+    r'|^\s*(?:从|根据|基于|结合)' + _WHOLE_HISTORY_CN +
+    r'(?:来看|看|判断)?\s*[，,]?\s*你(?:对我(?:是(?:一个)?什么样的人)?'
+    r'有什么(?:认识|了解|印象)|(?:认为|觉得)我(?:是(?:一个)?什么样的人|'
+    r'最(?:看重|在意|重视)什么))\s*[。！？.!?]*\s*$', re.I,
+)
+
 
 def plan(query: str) -> dict:
     """Return an explainable operation plan; preserve concrete topic bounds.
@@ -172,20 +215,24 @@ def plan(query: str) -> dict:
     positive, excluded, spans = _separate_exclusions(query)
     operation_text = _QUOTED.sub(' ', positive)
     complete_memory_summary = bool(_COMPLETE_MEMORY_SUMMARY.fullmatch(operation_text))
+    complete_person_inquiry = bool(_COMPLETE_PERSON_INQUIRY.fullmatch(operation_text))
     integrating = bool(_INTEGRATION.search(operation_text) or _THEMATIC_INQUIRY.search(operation_text)
                        or _INTEGRATED_VIEW.search(operation_text) or _NOMINAL_INTEGRATION_QUESTION.search(operation_text)
-                       or complete_memory_summary)
+                       or complete_memory_summary or complete_person_inquiry)
     facets = [name for name, pattern in _FACETS.items() if re.search(pattern, positive, re.I)]
     without_lead = re.sub(r'^\s*[A-Z][A-Za-z]*\b', ' ', positive)
     named = bool(re.search(r'\b[A-Z][A-Za-z0-9_-]{2,}\b', without_lead))
     # 'about my priorities' names the requested whole-person attribute, not a
     # new external topic. A following proper name/typed object still bounds it.
     scope_text = re.sub(r'\b(?:about|regarding|concerning)\s+(?:my|our)\s+(?:life|priorities|values|choices|decisions|development|experiences?|history)\b', ' ', positive, flags=re.I)
-    constrained = bool(_TOPIC_BOUND.search(scope_text) or _TYPED_OBJECT.search(positive)
+    # A fully consumed inquiry can contain the verb phrase "talked about"
+    # followed by an overview tail. Its "about" is not a new topical object.
+    # Names, quoted objects, typed domains and numbers keep their guards.
+    constrained = bool((not complete_person_inquiry and _TOPIC_BOUND.search(scope_text)) or _TYPED_OBJECT.search(positive)
                        or _QUOTED.search(positive) or re.search(r'\d', positive) or named)
     personal = bool(_MEMORY.search(positive) or _PERSONAL_WHOLE.search(positive)
                     or len(facets) >= 3 and re.search(r'\b(?:my|our)\b|我的|我们的', positive, re.I))
-    whole = bool(_HISTORY_RANGE.search(positive) or complete_memory_summary)
+    whole = bool(_HISTORY_RANGE.search(positive) or complete_memory_summary or complete_person_inquiry)
     holistic = bool(_HOLISTIC_OBJECT.search(positive))
     # A single named life domain remains a topical request. A genuinely whole
     # history request or integration across several personal attributes has

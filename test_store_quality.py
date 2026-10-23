@@ -342,6 +342,66 @@ class StoreQualityTests(unittest.TestCase):
         self.assertIn("QUERY-FOCUSED SOURCE EXCERPTS", result["content"])
         self.assertNotIn("PRIVATE-", literal)
 
+    def test_explicit_private_table_columns_are_withheld_before_raw_ranking(self):
+        for field, header, query in (
+            ('name', 'name | condition | outcome', 'Estimate Rivel success probability; omit names.'),
+            ('passport', 'passport_number | condition | outcome', 'Estimate Rivel success probability; omit passport numbers.'),
+            ('old-numeric', 'name | pressure | duration', 'Estimate Rivel mean pressure; omit names.'),
+            ('phone', 'phone_number | condition | outcome', 'Estimate Rivel success probability; omit phone numbers.'),
+            ('address', 'postal_address | condition | outcome', 'Estimate Rivel success probability; omit addresses.'),
+        ):
+            with self.subTest(field=field):
+                schema = 'Rivel observation columns:\n' + header
+                records = [f'PRIVATE-IDENTIFIER-{i:03d} | ' + (f'{10+i} | {100+i}' if field == 'old-numeric' else 'cold | pass') for i in range(121)]
+                self.add([schema] + records, user=field)
+                actual = self.raw(query, 100, user=field)
+                self.assertNotIn('PRIVATE-IDENTIFIER', '\n'.join(row['content'] for row in actual))
+                result = self.memory.search(field, query, 100)
+                self.assertNotIn('PRIVATE-IDENTIFIER', '\n'.join(row['content'] for row in result))
+
+    def test_private_table_filter_retains_safe_sentences_in_compact_source_context(self):
+        source = ('Rivel valves passed the final leak inspection.\nRivel observation columns:\n'
+                  'name | condition | outcome\nPRIVATE-PERSON | cold | pass\n'
+                  'PRIVATE-OTHER | cold | fail\nPRIVATE-THIRD | warm | pass')
+        self.add([source])
+        query = 'Summarize the Rivel observations without names.'
+        results = self.memory.search('target', query, 100)
+        text = '\n'.join(row['content'] for row in results)
+        self.assertIn('Rivel valves passed the final leak inspection.', text)
+        self.assertNotIn('PRIVATE-', text)
+
+    def test_private_table_filter_also_blocks_linked_and_structured_source_rescue(self):
+        private = ('Dataset ID DS-RIVEL-91. Rivel observation columns:\nname | pressure | duration\n'
+                   'PRIVATE-PERSON | 14 | 100\nPRIVATE-OTHER | 16 | 110\nPRIVATE-THIRD | 18 | 120')
+        safe = 'Dataset DS-RIVEL-91 procedure: estimate pressure using the observations.'
+        self.add([private, safe])
+        results = self.memory.search('target', 'Estimate dataset DS-RIVEL-91 mean pressure; omit names.', 100)
+        self.assertNotIn('PRIVATE-', '\n'.join(row['content'] for row in results))
+
+    def test_private_period_cells_and_following_rows_cannot_escape_raw_or_compact_filtering(self):
+        for index, (header, record, later) in enumerate((
+            ('name,condition,outcome', '"Dr. Vera Mallow",cold,pass', '"Prof. Other Person",warm,fail'),
+            ('name | condition | outcome', 'Dr. Vera Mallow | cold | pass', 'Prof. Other Person | warm | fail'),
+        )):
+            with self.subTest(header=header):
+                user = f'period-private-{index}'
+                self.add(['Mallow observation columns:\n'+header, record, later], user=user)
+                query = 'Estimate Mallow success probability; omit names.'
+                for results in (self.raw(query, 100, user=user), self.memory.search(user, query, 100)):
+                    text = '\n'.join(row['content'] for row in results)
+                    self.assertNotIn('Vera Mallow', text)
+                    self.assertNotIn('Other Person', text)
+
+    def test_private_period_table_keeps_safe_sentence_on_another_physical_line(self):
+        source = ('Mallow valves passed final leak inspection.\nMallow observation columns:\n'
+                  'name,condition,outcome\n"Dr. Vera Mallow",cold,pass\n"Prof. Other Person",warm,fail')
+        self.add([source])
+        results = self.memory.search('target', 'Summarize Mallow observations without names.', 100)
+        text = '\n'.join(row['content'] for row in results)
+        self.assertIn('Mallow valves passed final leak inspection.', text)
+        self.assertNotIn('Vera Mallow', text)
+        self.assertNotIn('Other Person', text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

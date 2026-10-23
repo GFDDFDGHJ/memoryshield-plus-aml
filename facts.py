@@ -785,12 +785,26 @@ def store_facts(
             continue
 
         single_valued = f.kind == "fact" or f.subject == "favorite"
-        # identical fact already active -> nothing to do
-        dup = conn.execute(
-            "SELECT fid FROM facts WHERE user_id=? AND subject=? AND predicate=?"
+        # Equal rule actions can have different literal scopes or exceptions
+        # in separate sources. Only coalesce them when the recovered context
+        # also agrees; repeated identical policies still occupy one index row.
+        duplicates = conn.execute(
+            "SELECT fid,source_rid FROM facts WHERE user_id=? AND subject=? AND predicate=?"
             " AND value=? AND source_role=? AND status='active'",
             (user_id, f.subject, f.predicate, f.value, source_role),
-        ).fetchone()
+        ).fetchall()
+        dup = duplicates[0] if duplicates else None
+        if (dup and f.kind == "rule" and source_rid is not None
+                and _has_items(conn)):
+            rule_context = {"user_id": user_id, "predicate": f.predicate, "value": f.value}
+            current_context = _complete_source_rules(conn, {**rule_context, "source_rid": source_rid}, True)
+            current_context = {quote.casefold() for quote in current_context}
+            dup = None
+            for previous in duplicates:
+                previous_context = _complete_source_rules(conn, {**rule_context, "source_rid": previous[1]}, True)
+                if {quote.casefold() for quote in previous_context} == current_context:
+                    dup = previous
+                    break
         if dup:
             if single_valued:
                 # Clean up conflicting active values from older derived data,
@@ -1140,7 +1154,7 @@ def _speaker_relevant(row: dict, query: str, *, background: bool = False) -> boo
 
 _RULE_SCOPE_HEADING = re.compile(
     r"\s*(?:(?:for|in|within|during|when|whenever|if)\b|针对|在|当|如果|仅对)"
-    r"[^.!?\n]{1,220}[:：]\s*", re.I)
+    r"(?:[^.!?\n]|\.(?=\d)){1,220}[:：]\s*", re.I)
 _RULE_GENERAL_HEADING = re.compile(
     r"\s*(?:for\s+(?:example|reference|clarity|brevity|consistency|readability|convenience|me|us|you)|"
     r"in\s+(?:fact|summary|conclusion|short|general)|whenever\s+possible)\s*[:：]\s*", re.I)
@@ -1164,22 +1178,22 @@ _RULE_WITHDRAWAL = re.compile(
     r"|\s*(?:此|这条|该)(?:规则|要求|指令)(?:已|已经)?(?:撤销|撤回|废止|失效|暂停)", re.I)
 
 
-def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items: bool) -> str:
-    """Recover the full source sentence when an older derived value was cut.
+def _complete_source_rules(conn: sqlite3.Connection, row: sqlite3.Row | dict, has_items: bool) -> list[str]:
+    """Recover each literal occurrence with its own source-local scope.
 
-    A uniquely matching source sentence is safe evidence. If the wording is
-    ambiguous or the raw source is unavailable, retain the stored condition
-    rather than inventing context around it.
+    Equal instruction text can occur under different headings. Quote those
+    occurrences separately rather than losing their conditions in a bare
+    derived-value fallback. No occurrence is chosen as more authoritative.
     """
     value = _display_rule(row["predicate"], row["value"])
     if not has_items or row["source_rid"] is None:
-        return value
+        return [value]
     source = conn.execute(
         "SELECT content FROM items WHERE user_id=? AND rid=? AND status='active'",
         (row["user_id"], row["source_rid"]),
     ).fetchone()
     if not source:
-        return value
+        return [value]
     needle = _clean(row["value"]).casefold()
     # Keep the original paragraph barriers while normalizing only whitespace
     # in the emitted quotes. A scope heading binds its contiguous rule list,
@@ -1189,36 +1203,37 @@ def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items:
                  for start,end in source_spans]
     matches = [index for index, sentence in enumerate(sentences)
                if needle in sentence.casefold()]
-    if len(matches) != 1:
-        return value
-    index = matches[0]
-    linked = [sentences[index]]
-    for previous in range(index - 1, -1, -1):
-        gap = source["content"][source_spans[previous][0]:source_spans[previous + 1][0]]
-        if re.search(r"\n[\t \r]*\n", gap):
-            break
-        candidate = sentences[previous]
-        if _RULE_SCOPE_HEADING.fullmatch(candidate):
-            linked.insert(0, candidate)
-            break
-        if not _RULE_BLOCK_MEMBER.match(candidate):
-            break
-    # Adjacent exceptions qualify the rule, rather than constituting another
-    # independent instruction. Stop at unrelated narration or a new rule.
-    for following, sentence in enumerate(sentences[index + 1:], index + 1):
-        exception = re.match(r"\s*(?:exception\b|except\b|unless\b|however\b|but\b|otherwise\b|注意|例外|但是|但若|除非|否则|不过)", sentence, re.I)
-        action = _RULE_FOLLOWUP.fullmatch(sentence)
-        action_text = action.group(1) if action else ''
-        # A verb-shaped first word alone is insufficient: Return Logistics,
-        # round tables and repeat customers are ordinary noun phrases. Keep
-        # only explicit instruction objects or unambiguous operation syntax.
-        sequential = action and (_ZH_INSTR.match(action_text) or _RULE_CONTINUATION_ACTION.match(action_text))
-        withdrawn = _RULE_WITHDRAWAL.match(sentence)
-        gap = source["content"][source_spans[following - 1][0]:source_spans[following][0]]
-        if not exception and (re.search(r"\n[\t \r]*\n", gap) or not (sequential or withdrawn)):
-            break
-        linked.append(sentence)
-    return " ".join(linked)
+    if not matches:
+        return [value]
+    recovered = []
+    for index in matches:
+        linked = [sentences[index]]
+        for previous in range(index - 1, -1, -1):
+            gap = source["content"][source_spans[previous][0]:source_spans[previous + 1][0]]
+            if re.search(r"\n[\t \r]*\n", gap):
+                break
+            candidate = sentences[previous]
+            if _RULE_SCOPE_HEADING.fullmatch(candidate):
+                linked.insert(0, candidate)
+                break
+            if not _RULE_BLOCK_MEMBER.match(candidate):
+                break
+        # Adjacent exceptions qualify this occurrence only. Stop at unrelated
+        # narration, a new rule, or an explicit paragraph barrier.
+        for following, sentence in enumerate(sentences[index + 1:], index + 1):
+            exception = re.match(r"\s*(?:exception\b|except\b|unless\b|however\b|but\b|otherwise\b|注意|例外|但是|但若|除非|否则|不过)", sentence, re.I)
+            action = _RULE_FOLLOWUP.fullmatch(sentence)
+            action_text = action.group(1) if action else ''
+            sequential = action and (_ZH_INSTR.match(action_text) or _RULE_CONTINUATION_ACTION.match(action_text))
+            withdrawn = _RULE_WITHDRAWAL.match(sentence)
+            gap = source["content"][source_spans[following - 1][0]:source_spans[following][0]]
+            if not exception and (re.search(r"\n[\t \r]*\n", gap) or not (sequential or withdrawn)):
+                break
+            linked.append(sentence)
+        quote = " ".join(linked)
+        if quote not in recovered:
+            recovered.append(quote)
+    return recovered
 
 
 _EXECUTION_QUERY = re.compile(
@@ -1319,17 +1334,20 @@ def relevant_rules(
     has_items = _has_items(conn)
     ranked = []
     for row in rows:
-        value = _complete_source_rule(conn, row, has_items)
-        overlap = len(q & _tokens(value + " " + row["predicate"]))
-        global_rule = _global_response_rule(value, row['confidence'])
-        if not overlap and not global_rule and (not asks_all_rules or row["confidence"] < 0.6):
-            continue
-        score = overlap / max(1.0, len(q) ** 0.5) + (0.15 if asks_rules else 0.0) + (.2 if global_rule else 0)
-        ranked.append((score, row, value, global_rule))
+        for value in _complete_source_rules(conn, row, has_items):
+            overlap = len(q & _tokens(value + " " + row["predicate"]))
+            global_rule = _global_response_rule(value, row['confidence'])
+            if not overlap and not global_rule and (not asks_all_rules or row["confidence"] < 0.6):
+                continue
+            score = overlap / max(1.0, len(q) ** 0.5) + (0.15 if asks_rules else 0.0) + (.2 if global_rule else 0)
+            ranked.append((score, row, value, global_rule))
     ranked.sort(key=lambda item: (-item[0], -item[1]["seq"], -item[1]["fid"]))
     out, seen = [], set()
     for score, row, value, global_rule in ranked:
-        key = (row["source_rid"], value.casefold())
+        # Identical attributed wording may be indexed in a source containing
+        # additional scopes too. Quote it once, using the selected original's
+        # provenance; raw records retain every occurrence and timestamp.
+        key = (row["source_role"], value.casefold())
         if key in seen:
             continue
         seen.add(key)
@@ -2557,6 +2575,23 @@ _SYNTHESIS_SALIENCE = re.compile(
     r"|决定|选择|取舍|否决|改为|改成|因为|由于|不再|撤销|撤回|更正", re.I)
 
 
+def excluded_table_segments(rows, exclusions) -> dict[int, set[int]]:
+    """Pure original-source positions belonging to an explicitly private table."""
+    if not exclusions:
+        return {}
+    rows = sorted((dict(row) for row in rows), key=lambda row: (row['seq'], row['rid']))
+    withheld = data_layer.excluded_source_spans(rows, exclusions)
+    result = {}
+    for row in rows:
+        private_spans = withheld.get(row['rid'], ())
+        if not private_spans:
+            continue
+        for segment, (start, end) in enumerate(dependency_layer.source_sentence_spans(str(row['content']))):
+            if any(start < private_end and end > private_start for private_start, private_end in private_spans):
+                result.setdefault(row['rid'], set()).add(segment)
+    return result
+
+
 def context_units_for_query(rows, query: str) -> list[dict]:
     """Pure source selector; input rows must already belong to one user.
 
@@ -2575,6 +2610,7 @@ def context_units_for_query(rows, query: str) -> list[dict]:
     if conflicts:
         rows = [row for row in rows if row['rid'] not in conflicts]
     rows.sort(key=lambda row:(row['seq'],row['rid']))
+    private_tables = excluded_table_segments(rows, exclusions)
     scope, topics, _ = source_context_scope(rows, original_query)
     context_request = scope != "ordinary"
     global_scope = scope == "global"
@@ -2584,6 +2620,8 @@ def context_units_for_query(rows, query: str) -> list[dict]:
     temporal_metadata_only = bool(_TEMPORAL_QUERY.search(query)) and not non_temporal_topics
     for row in rows:
         for segment, sentence in enumerate(_source_sentences(str(row["content"]))):
+            if segment in private_tables.get(row['rid'], ()):
+                continue
             if exclusions and query_layer.excluded_text(sentence, exclusions):
                 continue
             overlap = len(topics & _context_tokens(sentence))

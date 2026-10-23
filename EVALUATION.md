@@ -16,6 +16,61 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## v3.13.0: complete personal overviews, empirical tables and scoped rules
+
+This medium update extends evidence retrieval without changing the embedding
+model, reranker, storage schema or public Add/Search routes. Only invented
+fixtures, temporary databases and cached independent vectors are used during
+development; official raw task messages, questions and answers are not read.
+
+- Complete whole-person memory questions, such as what was learned about the
+  speaker from all conversations, share the global synthesis plan. Complete
+  grammatical matching preserves topical, named, quoted and numeric bounds;
+  a missing topic never opens the rest of the history. Chinese source-reference
+  parsing uses atomic tokens to prevent repeated-prefix backtracking.
+- Declared stable tables can contain one numeric variable or categorical
+  outcomes. Their original rows remain attached to an immediately adjacent
+  source-local observation title and explicit column declaration. Source,
+  speaker, session, dataset, missing-value and hidden-gap boundaries still
+  apply. No statistics, simulations or replacement values are inferred.
+- Repeated rule actions recover each occurrence's own heading, continuation
+  and exception. Equal actions in different sources are coalesced only when
+  their complete recovered contexts agree. Decimal revision headings retain
+  their scope; a local instruction is not promoted to a global policy merely
+  because another identical action appears in the same source.
+- Explicit privacy exclusions also apply to anonymous cells in declared
+  tables. Field-label matching normalizes underscores and hyphens without
+  rewriting source text. Privacy recognition uses original physical rows,
+  including quoted CSV cells and periods inside names, then maps the excluded
+  ranges to source segments. Affected rows are withheld from compact, raw and
+  linked retrieval; no projected/redacted observations or statistics are made
+  up. Raw retrieval conservatively withholds a mixed source containing such
+  rows; compact views can retain its separate safe source sentences.
+
+Independent fixtures show six single-variable/categorical cases improve exact
+observation coverage from 97/151 to 151/151 in the full return and 22/151 to
+151/151 in an 8k prefix; three existing two-numeric controls remain complete.
+All comparisons use the same fixture and evaluator. These are source-coverage
+measurements, not generated-answer or official-evaluation scores.
+
+Eight natural personal-overview requests recover all eight source domains.
+After freezing the grammar, ten new paraphrases improve recognition from 1/10
+to 8/10; ten domain/name/year/quote controls have no false global promotion.
+Two open-ended paraphrases remain unsupported. Histories containing many
+different global response policies can still crowd evidence out of small
+prefixes. Rule-scope controls improve from 8/13 to 13/13, while 100 repeated
+policies retain the distinct constraints without flooding the rule index.
+
+All 37 isolated offline scripts pass with the final frozen sources. Two fixed
+47-case cached-v4 retrieval seeds retain all previous required evidence, role,
+fidelity and ranking contracts. Extended-context, state, data and long-source
+controls retain 8/8, 12/12, 9/9 and 6/6 complete-evidence contracts. The
+16-worker offline check has no errors, cross-user leakage or literal failures.
+Independent table boundaries pass 13/13; eight additional Add/Search privacy
+controls pass, including quoted cell punctuation and safe mixed-source text.
+The exact public capability and privacy fixtures pass offline before deployment.
+These checks do not measure the downstream answer-generation/judging pipeline.
+
 ## v3.12.1: correct current-clause scope and repeated-policy ordering
 
 This patch addresses reproduced source-selection and assertion-scope defects.

@@ -1,4 +1,8 @@
 """Invented positive/negative compositional query plans; no model calls."""
+import json
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 import query_plan as Q
@@ -136,6 +140,65 @@ class QueryPlanTests(unittest.TestCase):
         for query in ('Why does the herbarium use photographs?', 'Who owns the relay?',
                       'What did I say about the permit that was not renewed?', '我的职位是什么？'):
             self.assertEqual(Q.plan(query)['task'], 'ordinary')
+
+    def test_complete_whole_person_inquiries_retrieve_the_history(self):
+        for query in (
+            'What have you learned about me from all our conversations?',
+            'What do you remember about me as a person?',
+            'Based on our entire history, what sort of person am I?',
+            'Considering everything we have discussed, what matters most to me?',
+            'How would you describe me to someone who has never met me?',
+            'What have I talked about over time?',
+            '从之前所有聊天来看，你对我是一个什么样的人有什么认识？',
+            '根据我们聊过的所有事情，你觉得我最看重什么？',
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(Q.plan(query)['task'], 'global_synthesis')
+
+    def test_person_inquiry_cannot_swallow_a_domain_or_named_complement(self):
+        for query in (
+            'What have you learned about my work from all our conversations?',
+            'What have you learned about me from our conversations about ceramics?',
+            'What do you remember about me as a person who repaired the turbine?',
+            'Based on our entire history about Zephyr, what sort of person am I?',
+            'What have you learned about me from all our conversations about permit 432?',
+            'What have you learned about me from all our conversations "ceramics"?',
+            'What have you learned about Liora from all our conversations?',
+            'How would you describe my work to someone who has never met me?',
+            'What did I discuss about the unknown xylophone calibration?',
+            '根据我们聊过的陶艺事情，你觉得我最看重什么？',
+            '从之前所有青云计划聊天来看，你对我有什么了解？',
+        ):
+            with self.subTest(query=query):
+                self.assertNotEqual(Q.plan(query)['task'], 'global_synthesis')
+
+    def test_person_inquiry_keeps_explicit_privacy_exclusions(self):
+        query='What do you remember about me as a person, omitting home addresses and access codes?'
+        result=Q.plan(query)
+        self.assertEqual(result['task'], 'global_synthesis')
+        self.assertEqual(result['excluded_categories'], ['address', 'access_code'])
+        self.assertNotIn('addresses', result['positive_query'])
+        self.assertNotIn('codes', result['positive_query'])
+        self.assertEqual(Q.plan('根据我们聊过的所有事情，你觉得我最看重什么？不要透露我的住址。')['excluded_categories'], ['address'])
+
+    def test_repeated_chinese_source_references_have_bounded_runtime(self):
+        # An invalid trailing topic previously exposed exponentially many
+        # "我们的" versus "我们" + "的" tokenizations. A child timeout
+        # protects the test runner as well as future request handlers.
+        script=('import json,sys; sys.path.insert(0,sys.argv[1]); '
+                'import query_plan as Q; '
+                'print(json.dumps(Q.plan(sys.stdin.buffer.read().decode("utf-8"))))')
+        reference='我们的'*7000
+        for suffix, expected in (
+            ('交流，你对我有什么了解？', 'global_synthesis'),
+            ('陶艺交流，你对我有什么了解？', 'ordinary'),
+        ):
+            with self.subTest(suffix=suffix):
+                completed=subprocess.run(
+                    [sys.executable, '-c', script, str(Path(Q.__file__).parent)],
+                    input='根据'+reference+suffix, text=True, encoding='utf-8', capture_output=True,
+                    check=True, timeout=5)
+                self.assertEqual(json.loads(completed.stdout)['task'], expected)
 
     def test_exclusion_removal_happens_before_scope_guard(self):
         result = Q.plan('Connect the reasons behind my life choices without my API keys or passport number.')
