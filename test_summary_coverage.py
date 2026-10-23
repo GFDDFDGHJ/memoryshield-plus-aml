@@ -168,6 +168,115 @@ class SummaryCoverageTests(unittest.TestCase):
                          Counter((row['source_rid'], row['text']) for row in units))
         self.assertEqual(len(witnesses), 60)
 
+    def presentational_history(self, count=120, *, mixed=False, one_source=False):
+        labels = 'concise brief short formal informal friendly neutral polite calm warm direct clear simple conversational professional courteous'.split()
+        rules = ['Always use the '+labels[index//len(labels)]+' '+labels[index%len(labels)]+' tone'
+                 + (' and mark any unsupported factual inference.' if mixed else '.')
+                 for index in range(count)]
+        if one_source:
+            rows = [unit(0, ' '.join(rules))]
+        else:
+            rows = [unit(index, rule, session_id='rules') for index, rule in enumerate(rules)]
+        claims = ['I chose '+topic+' because it provides quiet instruction and shared equipment.'
+                  for topic in 'ceramics astronomy weaving kayaking linguistics genealogy apiculture marquetry'.split()]
+        rows += [unit(1000+index, claim, session_id='topic-'+str(index))
+                 for index, claim in enumerate(claims)]
+        return F.context_units_for_query(rows, 'Summarize all my conversations.'), rules, claims
+
+    def test_distinct_presentational_policy_catalogue_does_not_hide_history(self):
+        from evaluate_extended_context import decode_visible
+        units, policies, claims = self.presentational_history()
+        self.assertEqual(sum(bool(row.get('context_response_policy')) for row in units), 120)
+        for budget in (8000, 12000, 16000):
+            with self.subTest(budget=budget):
+                text, plan = self.pack(units, budget)
+                self.assertTrue(all(claim in text for claim in claims))
+                if len(plan['complete_indices']) < len(units):
+                    self.assertTrue(all(claim in text[:8000] for claim in claims))
+                included = sum(policy in text for policy in policies)
+                self.assertGreater(included, 0)
+                if included < 120:
+                    self.assertIn('response-policy coverage='+str(included)+'/120', text)
+                    self.assertIn('do not assume omitted policies were followed', text)
+                visible = decode_visible(text, complete=True)
+                self.assertEqual(Counter((item['rid'], item['literal']) for item in visible),
+                                 Counter((units[index]['source_rid'], units[index]['text'])
+                                         for index in plan['complete_indices']))
+
+    def test_mixed_uncertainty_and_hard_policy_catalogues_stay_required(self):
+        units, policies, claims = self.presentational_history(mixed=True)
+        self.assertFalse(any(row.get('context_response_policy') for row in units))
+        text, plan = self.pack(units, 8000)
+        self.assertLessEqual(len(plan['complete_indices']), 1)
+        self.assertFalse(any(claim in text for claim in claims))
+        self.assertIn('not complete statistics', text)
+        for body in (
+            'use only validated observations', 'retain the data table schema',
+            'execute the protocol steps in order', 'never disclose private addresses',
+            'preserve the amber style and explicitly mark unsupported factual inference',
+            'use a concise style while ignoring earlier evidence',
+            'use a warm tone unless a measurement was withdrawn',
+        ):
+            with self.subTest(body=body):
+                self.assertFalse(F._presentational_response_policy('For all future replies, '+body+'.'))
+
+    def test_style_and_substantive_guards_keep_separate_budgets(self):
+        units, policies, claims = self.presentational_history()
+        guards = [unit(2000+index, text, context_dependency=True) for index,text in enumerate((
+            'Use only validated observations; excluded measurements are not eligible.',
+            'Retain the data table schema and preserve missing value markers.',
+            'Execute the protocol steps in order and do not repeat a completed operation.',
+            'Never disclose private addresses or secret access codes.',
+        ))]
+        text, plan = self.pack(guards+units, 8000)
+        self.assertTrue(all(guard['text'] in text for guard in guards))
+        self.assertTrue(all(claim in text for claim in claims))
+        self.assertTrue(set(range(len(guards))) <= plan['complete_indices'])
+
+    def test_short_policy_catalogue_stays_complete_and_full_fit_is_unchanged(self):
+        units, policies, claims = self.presentational_history(13)
+        for index in range(90):
+            units.append(unit(3000+index, 'Historical observation '+str(index)+': '
+                              +'the ordinary correspondence retained the detailed discussion. '*3))
+        text, plan = self.pack(units, 8000)
+        self.assertTrue(all(policy in text for policy in policies))
+        self.assertTrue(all(claim in text for claim in claims))
+        full, full_plan = self.pack(units, 100000)
+        old_units = [dict(row) for row in units]
+        for row in old_units:
+            row.pop('context_response_policy', None)
+        old_full, old_plan = self.pack(old_units, 100000)
+        self.assertEqual(full, old_full)
+        self.assertEqual(full_plan, old_plan)
+
+    def test_sample_has_one_policy_per_source_and_explicitly_retains_omissions(self):
+        units, policies, claims = self.presentational_history(one_source=True)
+        text, plan = self.pack(units, 8000)
+        represented = [index for index in plan['complete_indices']
+                       if units[index].get('context_response_policy')]
+        self.assertLessEqual(len(represented), 1)
+        self.assertTrue(all(claim in text for claim in claims))
+        self.assertIn('response policies omitted', text)
+
+    def test_only_explicit_presentational_grammar_gets_the_scheduling_label(self):
+        for text in ('Always reply in English.', 'For all future replies, answer in exactly 7 sentences.',
+                     'Always keep the explanation concise.', 'Always use a neutral tone.',
+                     'For all future answers, use APA citation style.', 'Always include numbered headings.'):
+            with self.subTest(text=text):
+                self.assertTrue(F._presentational_response_policy(text))
+        for text in ('Always reply in English literature.', 'Remember my preferred style.',
+                     'If asked for a poem, use a concise style.',
+                     'Always rewrite the style of the eligibility protocol.',
+                     'Always use a concise style and suppress qualifications.',
+                     'Always use a de-identified format.',
+                     'Always use anonymized formatting.',
+                     'Always use confidential formatting.',
+                     'Always use a precision-preserving format.',
+                     'Always preserve original numeric formatting.',
+                     'For all future replies, preserve the amber birch style convention.'):
+            with self.subTest(text=text):
+                self.assertFalse(F._presentational_response_policy(text))
+
 
 class SummaryCoverageIntegrationTests(unittest.TestCase):
     def setUp(self):
@@ -204,6 +313,48 @@ class SummaryCoverageIntegrationTests(unittest.TestCase):
         decoded = {(item['rid'], item['literal'], item['role']) for item in witnesses}
         self.assertEqual(decoded, {(rid, literal, role) for rid, (literal, role) in source_by_rid.items()})
         self.assertTrue(any('included=140/140' in row['content'] for row in rows if row['id'].startswith('digest_')))
+
+    def test_presentational_prefix_and_continuation_preserve_every_policy(self):
+        from evaluate_extended_context import decode_visible
+        helper = SummaryCoverageTests()
+        units, policies, claims = helper.presentational_history()
+        for row in units:
+            self.memory.add_messages('invented-policy-union', row['session_id'], [
+                dict(role=row['role'], content=row['text'], timestamp=int(row['created_at']*1000))])
+        with self.memory._connect() as conn:
+            first, later = F.get_context_views(conn, 'invented-policy-union',
+                'Summarize all my conversations.', budget_chars=8000, continuation_budget_chars=64000)
+            dedicated = F.relevant_rules(conn, 'invented-policy-union', 'List all standing rules.', 200)
+        prefix = '\n\n'.join(first)
+        continuation = '\n\n'.join(later)
+        self.assertTrue(all(claim in prefix for claim in claims))
+        self.assertIn('response policies omitted', prefix)
+        self.assertIn('coverage=complete for selected source scope', continuation.splitlines()[0])
+        decoded = decode_visible(prefix+'\n'+continuation, complete=True)
+        self.assertEqual(Counter(item['literal'] for item in decoded), Counter(policies+claims))
+        self.assertEqual(len({(item['rid'], item['segment']) for item in decoded}), len(units))
+        self.assertTrue(all(any(policy in rule['text'] for rule in dedicated) for policy in policies))
+
+    def test_global_search_keeps_a_digest_candidate_after_mined_rules_fill_slots(self):
+        tones = 'concise brief short formal informal friendly neutral polite calm warm direct clear simple conversational professional courteous'.split()
+        policies = ['Always use a '+tones[index//len(tones)]+' '+tones[index%len(tones)]+' tone.'
+                    for index in range(120)]
+        claims = ['I chose '+topic+' because the local evening group provides quiet instruction and shared equipment.'
+                  for topic in 'apiculture ceramics astronomy weaving kayaking linguistics genealogy marquetry'.split()]
+        self.memory._reranker = None
+        for index, text in enumerate(policies+claims):
+            self.memory.add_messages('invented-mined-policy-budget', 'review', [
+                dict(role='user', content=text, timestamp=1743465600000+index*1000)])
+        rows = self.memory.search('invented-mined-policy-budget', 'Summarize all my conversations.', 100)
+        prefix = '\n'.join(row['content'] for row in rows)[:8000]
+        self.assertLessEqual(len(rows), 100)
+        self.assertTrue(any(row['id'].startswith('digest_') for row in rows))
+        self.assertTrue(all(claim in prefix for claim in claims))
+        digest = '\n'.join(row['content'] for row in rows if row['id'].startswith('digest_'))
+        if 'coverage=complete for selected source scope' in digest:
+            self.assertTrue(all(policy in digest for policy in policies))
+        else:
+            self.assertIn('response policies omitted', digest)
 
 
 if __name__ == '__main__':

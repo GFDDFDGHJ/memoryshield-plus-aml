@@ -197,5 +197,128 @@ class NumberedRuleIntegrationTests(unittest.TestCase):
             harness.tearDown()
 
 
+LABELLED_PROCEDURE = (
+    'Tamarack controller procedure:\n'
+    'Initial state: clasp is open and count is zero.\n'
+    'Rule Wake: If clasp is closed, add ten to count.\n'
+    'Rule Reset: If count is zero, close the clasp.\n'
+    'Rule Finish: If clasp is closed, output the Tamarack release decision.\n'
+    'Execute the rules once in written order.\n'
+)
+LABELLED_LITERALS = tuple(line for line in LABELLED_PROCEDURE.splitlines() if line)
+LONG_LABELLED_PROCEDURE = (
+    'The ordinary storage drawer contains archival cloth and spare hooks. '*90+'\n'
+    + LABELLED_PROCEDURE
+)
+LABELLED_QUERY = 'Apply the Tamarack controller procedure and report the release decision.'
+
+
+class LabelledRuleBlockTests(unittest.TestCase):
+    def test_initial_declaration_and_named_operations_are_one_literal_block(self):
+        text = LABELLED_PROCEDURE
+        anchor = text.index('Rule Finish:')
+        self.assertEqual(D.numbered_rule_spans(text, [(anchor, anchor+4)]), [(0, len(text))])
+        spans = D.source_sentence_spans(text)
+        target = next(index for index,(start,end) in enumerate(spans) if start <= anchor < end)
+        selected = D.numbered_rule_indexes(text, {target}) | {target}
+        self.assertEqual(selected, set(range(len(spans))))
+
+    def test_numbered_procedure_allows_two_labelled_initial_declarations(self):
+        text = ('Tamarack calculation procedure:\n'
+                'Initial conditions: clasp is open.\n'
+                'Starting values: count is zero.\n'
+                '1. If clasp is open, add two to count.\n'
+                '2. If count exceeds one, output the release decision.\n')
+        anchor = text.index('2. If')
+        self.assertEqual(D.numbered_rule_spans(text, [(anchor, anchor+4)]), [(0, len(text))])
+
+    def test_initial_declaration_before_heading_stays_unattached(self):
+        prefix = 'Initial state: count is ninety.\n'
+        text = prefix + LABELLED_PROCEDURE
+        anchor = text.index('Rule Finish:')
+        selected = D.numbered_rule_spans(text, [(anchor, anchor+4)])
+        self.assertEqual(selected, [(len(prefix), len(text))])
+        self.assertNotIn('count is ninety', text[selected[0][0]:selected[0][1]])
+
+    def test_duplicate_and_mixed_labels_are_not_a_complete_program(self):
+        controls = (
+            LABELLED_PROCEDURE.replace('Rule Reset:', 'Rule Wake:'),
+            LABELLED_PROCEDURE.replace('Rule Reset:', 'Rule WAKE:'),
+            LABELLED_PROCEDURE.replace('Rule Reset:', '2.'),
+        )
+        for text in controls:
+            anchor = text.index('Rule Finish:')
+            self.assertEqual(D.numbered_rule_spans(text, [(anchor, anchor+4)]), [])
+
+    def test_unheaded_narrative_and_scope_gaps_are_not_operational_blocks(self):
+        controls = (
+            LABELLED_PROCEDURE.replace('Tamarack controller procedure:\n', ''),
+            LABELLED_PROCEDURE.replace('Rule Reset:', 'The garden was bright.\nRule Reset:'),
+            LABELLED_PROCEDURE.replace('Rule Reset:', '\nRule Reset:'),
+            LABELLED_PROCEDURE.replace('Rule Reset:', 'For the Cedar controller only:\nRule Reset:'),
+            LABELLED_PROCEDURE.replace('If count is zero, close the clasp.', 'I closed the clasp.'),
+            LABELLED_PROCEDURE.replace('If clasp is closed, add ten to count.', 'Return Logistics opened a depot.'),
+        )
+        for text in controls:
+            anchor = text.index('Rule Finish:')
+            self.assertEqual(D.numbered_rule_spans(text, [(anchor, anchor+4)]), [])
+
+    def test_excessive_initial_declarations_and_oversized_lists_are_rejected(self):
+        text = LABELLED_PROCEDURE.replace('Rule Wake:',
+                'Starting values: count is zero.\nInitial configuration: mode is idle.\nRule Wake:')
+        anchor = text.index('Rule Finish:')
+        self.assertEqual(D.numbered_rule_spans(text, [(anchor, anchor+4)]), [])
+        text = 'Tamarack controller rules:\n' + ''.join(
+            f'Rule Label{index}: If count is zero, add one to count.\n' for index in range(26))
+        anchor = text.rfind('Rule Label')
+        self.assertEqual(D.numbered_rule_spans(text, [(anchor, anchor+4)]), [])
+
+
+class LabelledRuleIntegrationTests(unittest.TestCase):
+    def test_long_preview_recovers_initial_state_and_each_rule_once(self):
+        from test_rerank_store import S
+        preview = S._query_preview(LONG_LABELLED_PROCEDURE, LABELLED_QUERY, 1200)
+        for literal in LABELLED_LITERALS:
+            self.assertEqual(preview.count(literal), 1)
+        self.assertLess(preview.index('Rule Wake:'), preview.index('Rule Reset:'))
+        self.assertLess(preview.index('Rule Reset:'), preview.index('Rule Finish:'))
+        self.assertNotIn('count =', preview)
+
+    def test_private_initial_gap_does_not_reconnect_the_program(self):
+        import facts as F
+        original = LABELLED_PROCEDURE.replace('Initial state: clasp is open and count is zero.',
+                     'Initial state: my home address is 79 Invented Larch Road.')
+        original_units = F._source_sentences(original)
+        allowed = [dict(source_rid=9, segment=index, content=original, text=part)
+                   for index,part in enumerate(original_units) if 'home address' not in part]
+        anchor = next(index for index,unit in enumerate(allowed) if unit['text'].startswith('Rule Finish:'))
+        extra = F._procedure_dependency_indexes(allowed, {anchor})
+        visible = '\n'.join(allowed[index]['text'] for index in extra)
+        self.assertNotIn('Rule Wake:', visible)
+        self.assertNotIn('Rule Reset:', visible)
+        self.assertNotIn('79 Invented', visible)
+
+    def test_full_search_one_and_hundred_keep_complete_assistant_source(self):
+        import test_rerank_store as T
+        harness = T.ScopedDatabaseIntegrationTests()
+        harness.setUp()
+        try:
+            harness.memory._reranker = None
+            harness.add(LONG_LABELLED_PROCEDURE, .98, role='assistant')
+            harness.add(LONG_LABELLED_PROCEDURE.replace('Tamarack', 'FOREIGN-TAMARACK'),
+                        .999, user='other')
+            for top_k in (1, 100):
+                results = harness.memory.search('target', LABELLED_QUERY, top_k)
+                visible = '\n'.join(row['content'] for row in results)[:8000]
+                for literal in LABELLED_LITERALS:
+                    self.assertIn(literal, visible)
+                self.assertNotIn('FOREIGN-TAMARACK', visible)
+                source_rows = [row for row in results if row.get('source_rid') == 1]
+                self.assertTrue(source_rows)
+                self.assertTrue(all(row['role'] == 'assistant' for row in source_rows))
+        finally:
+            harness.tearDown()
+
+
 if __name__ == '__main__':
     unittest.main()

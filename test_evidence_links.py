@@ -15,6 +15,46 @@ def source(rid, content, *, session=None, role="user", user="isolated"):
 
 
 class EvidenceLinkTests(unittest.TestCase):
+    def test_explicit_method_namespaces_recover_interpretation_and_eligibility(self):
+        for label in ('Method', 'Procedure', 'Algorithm', '方法', '算法'):
+            with self.subTest(label=label):
+                rows = [source(1, label+' ID: MT-LARCH-87. Schema: v is force in N. '
+                    'Only dry observations are eligible. Divide t by 1000 before applying the convention. '
+                    'My private medical record is PRIVATE-NEIGHBOR.', role='assistant'),
+                    source(2, label+' MT-LARCH-87 new case: v=18.5; t=2750.', role='user')]
+                got = select_linked_sources(rows, 'Apply '+label+' MT-LARCH-87 to the new case.', {2})
+                self.assertEqual([row['source_rid'] for row in got], [1])
+                self.assertEqual(got[0]['role'], 'assistant')
+                self.assertIn('Only dry observations are eligible.', got[0]['quote'])
+                self.assertIn('Divide t by 1000', got[0]['quote'])
+                self.assertNotIn('PRIVATE-NEIGHBOR', got[0]['quote'])
+                self.assertEqual(got[0]['evidence_links'][0]['identifier_kind'], 'method')
+
+    def test_method_aliases_share_a_namespace_but_protocols_do_not(self):
+        rows = [source(1, 'Method ID MT-FERN-12. Schema: time is in milliseconds.'),
+                source(2, 'Protocol MT-FERN-12. Schema: time is in hours.'),
+                source(3, 'Procedure MT-FERN-12 new case: time=4500.')]
+        got = select_linked_sources(rows, 'Apply algorithm MT-FERN-12 to the next case.', {3})
+        self.assertEqual([row['source_rid'] for row in got], [1])
+        self.assertEqual(select_linked_sources(rows, 'Apply MT-FERN-12 to the next case.', {3}), [])
+
+    def test_plain_person_or_method_names_do_not_form_bare_identifier_links(self):
+        rows = [source(1, 'Method Rowan. Schema: v is in litres.'),
+                source(2, 'Rowan has a private medical record.'),
+                source(3, 'Method Rowan new case: v=3.4.')]
+        self.assertEqual(select_linked_sources(rows, 'Apply method Rowan.', {3}), [])
+        self.assertEqual(select_linked_sources(rows, 'Apply Rowan.', {3}), [])
+
+    def test_different_explicit_method_headers_keep_the_existing_scope_guards(self):
+        rows = [source(1, 'Method MT-FERN-12. Schema: v is in litres.'),
+                source(2, 'Procedure MT-FERN-13. Schema: v is in gallons.'),
+                source(3, 'Method MT-FERN-13 compares against MT-FERN-12 for calibration.'),
+                source(4, 'Algorithm MT-FERN-12 new case: v=8.2.')]
+        self.assertEqual(conflicting_source_ids(rows, 'Apply method MT-FERN-12.'), {2})
+        got = select_linked_sources(rows, 'Apply method MT-FERN-12.', {4})
+        self.assertEqual([row['source_rid'] for row in got], [1, 3])
+        self.assertNotIn('gallons', '\n'.join(row['quote'] for row in got))
+
     def test_dataset_definition_units_and_calibration_cross_session(self):
         definition = ("Dataset ID: ds-q7m4. Schema: p is gauge pressure in kPa; t is elapsed seconds. "
                       "Valid readings require dry mode. Subtract 1.75 from p for calibration.")

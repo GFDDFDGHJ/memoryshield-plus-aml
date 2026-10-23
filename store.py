@@ -119,7 +119,7 @@ _CORRECTION_CUE = re.compile(
     r"|^\s*(?:更正|纠正|修正|不对|实际上)", re.I,
 )
 _LINK_REFERENCE = re.compile(
-    r"\b(?:data[ _-]?sets?|projects?|protocols?)\b|数据集|项目|协议|规程"
+    r"\b(?:data[ _-]?sets?|projects?|protocols?|methods?|procedures?|algorithms?)\b|数据集|项目|协议|规程|方法|算法|流程"
     r"|[A-Za-z][A-Za-z0-9_.]*[-:/][A-Za-z0-9_.:/-]+", re.I,
 )
 
@@ -753,6 +753,13 @@ class MemoryStore:
         # displace the exact record and repeat its neighboring turns.
         digest_cap = 6 if wants_summary else (2 if raw_count > top_k else 0)
         digest_limit = min(digest_cap, max(0, structured_limit - len(candidates)))
+        if (wants_summary and plan['task'] == 'global_synthesis'
+                and top_k >= 8 and structured_limit > 0):
+            # A full candidate list of mined rules has not spent the actual
+            # response budget yet. Let a global source view compete before
+            # digest-first packing; the same count/character limits still
+            # bound the selected output and retain omitted-policy disclosure.
+            digest_limit = max(1, digest_limit)
         digest_budget = 12000 if wants_summary else 2000
         continuation_views = []
         if (wants_summary and top_k >= 8 and digest_limit

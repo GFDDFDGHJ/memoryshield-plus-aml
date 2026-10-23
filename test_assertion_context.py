@@ -85,6 +85,38 @@ DIRECT_ASSERTIONS = [
 
 
 class AssertionContextTests(unittest.TestCase):
+    def test_new_first_person_clause_is_not_part_of_a_literal_fact_value(self):
+        cases = [
+            ('I live in Northmere, and I work at Finch Studio.',
+             [('location', 'Northmere'), ('work', 'Finch Studio')]),
+            ('I work at Finch Studio, and I live in Northmere.',
+             [('work', 'Finch Studio'), ('location', 'Northmere')]),
+            ('My name is Avens, and I live in Northmere.',
+             [('name', 'Avens'), ('location', 'Northmere')]),
+            ('I live in Northmere and I work at Finch Studio.',
+             [('location', 'Northmere'), ('work', 'Finch Studio')]),
+            ('My name is Avens, my favorite color is amber.',
+             [('name', 'Avens'), ('color', 'amber')]),
+        ]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual([(f.predicate, f.value) for f in F.extract_facts(source)], expected)
+
+    def test_literal_commas_quotes_structured_values_and_rule_text_are_preserved(self):
+        controls = [
+            ('I live in Northmere, New Haven.', 'Northmere, New Haven'),
+            ('My name is Avens, Jr.', 'Avens, Jr'),
+            ('My name is "Avens, and I am unusual".', 'Avens, and I am unusual'),
+            ('{"subject":"Aster","relation":"label","object":"Avens, and I am unusual"}',
+             'Avens, and I am unusual'),
+            ('I prefer Northmere, and I love Cedar Quay.', 'northmere and i love cedar quay'),
+            ('Always include the units, and I am responsible for validation.',
+             'Always include the units, and I am responsible for validation'),
+        ]
+        for source, expected in controls:
+            with self.subTest(source=source):
+                self.assertIn(expected, [f.value for f in F.extract_facts(source)])
+
     def test_nonasserted_self_descriptions_do_not_become_current(self):
         for text in NONASSERTIONS:
             with self.subTest(text=text):
@@ -157,6 +189,27 @@ class AssertionContextIntegrationTests(unittest.TestCase):
         with self.memory._connect() as connection:
             return [tuple(row) for row in connection.execute(
                 "SELECT value,status FROM facts WHERE user_id='target' AND predicate='location' ORDER BY seq")]
+
+    def test_compound_assertion_can_be_retracted_by_its_exact_location(self):
+        source = 'I live in Northmere, and I work at Finch Studio.'
+        self.add(source)
+        self.add('I no longer live in Northmere.')
+        self.assertEqual(self.state(), [('Willow Bay', 'stale'), ('Northmere', 'stale')])
+        with self.memory._connect() as connection:
+            work = connection.execute("SELECT value FROM facts WHERE user_id='target'"
+                " AND predicate='work' AND status='active'").fetchall()
+            original = connection.execute('SELECT content FROM items WHERE content=?', (source,)).fetchone()[0]
+        self.assertEqual([row[0] for row in work], ['Finch Studio'])
+        self.assertEqual(original, source)
+
+    def test_compound_employment_retraction_leaves_location_intact(self):
+        self.add('I work at Finch Studio, and I live in Northmere.')
+        self.add('I no longer work at Finch Studio.')
+        self.assertEqual(self.state(), [('Willow Bay', 'stale'), ('Northmere', 'active')])
+        with self.memory._connect() as connection:
+            work = connection.execute("SELECT value FROM facts WHERE user_id='target'"
+                " AND predicate='work' AND status='active'").fetchall()
+        self.assertEqual(work, [])
 
     def test_report_question_hypothesis_and_old_event_cannot_retire_current_value(self):
         for text in NONASSERTIONS:

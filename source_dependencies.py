@@ -82,6 +82,10 @@ def execution_control_indexes(sentences: list[str]) -> set[int]:
 
 
 _NUMBERED_LINE = re.compile(r'^\s*(?P<number>\d{1,3})[.)]\s+(?P<body>\S.*)$')
+_NAMED_RULE_LINE = re.compile(
+    r'^\s*Rule\s+(?P<label>[A-Za-z][A-Za-z0-9_-]{0,31})\s*:\s+(?P<body>\S.*)$', re.I)
+_INITIAL_DECLARATION = re.compile(
+    r'^\s*(?:initial|starting)\s+(?:state|values?|conditions?|configuration)\s*:\s+\S', re.I)
 _RULE_ACTION = (
     r'(?:add|subtract|multiply|divide|set|replace|round|truncate|return|stop|skip|'
     r'repeat|apply|execute|process|use|format|include|omit|keep|write|output|'
@@ -108,7 +112,13 @@ def _operational_item(body: str) -> bool:
 
 
 def _numbered_rule_blocks(text: str) -> list[tuple[int, int]]:
-    """Find bounded contiguous literal procedures; never resolve a source."""
+    """Find bounded headed literal procedures; never resolve a source.
+
+    A list can use consecutive ordinals or unique explicit ``Rule LABEL:``
+    labels. Up to two labelled initial declarations may occur between its
+    heading and first operation. An earlier unscoped declaration is not
+    attached to a later heading, and no variable or rule is interpreted.
+    """
     spans = source_sentence_spans(text)
     lines = []
     offset = 0
@@ -119,31 +129,55 @@ def _numbered_rule_blocks(text: str) -> list[tuple[int, int]]:
     at = 0
     while at < len(lines):
         match = _NUMBERED_LINE.fullmatch(lines[at][2])
-        if not match:
+        named = _NAMED_RULE_LINE.fullmatch(lines[at][2])
+        if not match and not named:
             at += 1
             continue
         first = at
-        number = int(match['number'])
+        numbered = bool(match)
+        number = int(match['number']) if match else None
+        labels = set()
         bodies = []
         invalid = False
         while at < len(lines):
             current = _NUMBERED_LINE.fullmatch(lines[at][2])
-            if not current:
+            named = _NAMED_RULE_LINE.fullmatch(lines[at][2])
+            if not current and not named:
                 break
-            if int(current['number']) != number or not _operational_item(current['body']):
+            if bool(current) != numbered:
                 invalid = True
-            bodies.append(current['body'])
-            number += 1
+            if current:
+                if number is None or int(current['number']) != number:
+                    invalid = True
+                number = int(current['number']) + 1
+                body = current['body']
+            else:
+                label = named['label'].casefold()
+                if label in labels:
+                    invalid = True
+                labels.add(label)
+                body = named['body']
+            if not _operational_item(body):
+                invalid = True
+            bodies.append(body)
             at += 1
             # Indented continuation lines remain literal members of that
             # item; a blank line is an explicit scope barrier.
             while (at < len(lines) and lines[at][2].strip()
                    and lines[at][2][:1] in {' ', '\t'}
-                   and not _NUMBERED_LINE.fullmatch(lines[at][2])):
+                   and not _NUMBERED_LINE.fullmatch(lines[at][2])
+                   and not _NAMED_RULE_LINE.fullmatch(lines[at][2])):
                 at += 1
         if invalid or not 2 <= len(bodies) <= MAX_DEPENDENCIES or first == 0:
             continue
-        heading = lines[first - 1][2].strip()
+        heading_index = first - 1
+        declarations = 0
+        while heading_index >= 0 and _INITIAL_DECLARATION.match(lines[heading_index][2]):
+            declarations += 1
+            heading_index -= 1
+        if declarations > 2 or heading_index < 0:
+            continue
+        heading = lines[heading_index][2].strip()
         if (not heading or not _EXECUTION_SUBJECT.search(heading)
                 or not (heading.endswith((':', '：')) or execution_control_indexes([heading]))):
             continue
@@ -154,7 +188,7 @@ def _numbered_rule_blocks(text: str) -> list[tuple[int, int]]:
             if not execution_control_indexes([lines[end][2]]):
                 break
             end += 1
-        block_start = lines[first - 1][0]
+        block_start = lines[heading_index][0]
         block_end = lines[end - 1][1]
         block = {index for index, (start, finish) in enumerate(spans)
                  if start < block_end and finish > block_start}
@@ -181,13 +215,15 @@ def numbered_rule_spans(text: str, anchors: list[tuple[int, int]]) -> list[tuple
 
 
 def numbered_rule_indexes(text: str, anchors: set[int]) -> set[int]:
-    """Quote a bounded, explicit source-local numbered procedure as a block.
+    """Quote a bounded, explicit source-local literal procedure as a block.
 
     A matching sentence may need earlier steps whose variables differ. The
     procedure must have an adjacent explicit rule/procedure heading and at
-    least two consecutive numbered operational items. Blank lines, ordinary
-    unindented narration, numbering gaps and more than 24 items end or reject
-    the block. No source is followed, and no rule is executed or made active.
+    least two consecutive numbered or uniquely named operational items. Only
+    labelled initial declarations inside that heading belong to the block.
+    Blank lines, narration, mixed or duplicate labels, numbering gaps and
+    more than 24 items end or reject it. No source is followed, and no rule is
+    executed or made active.
 
     Indexes refer to ``source_sentence_spans(text)``. Callers must keep source
     RID, role and order, and apply their existing exclusion and size checks.

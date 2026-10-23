@@ -193,6 +193,85 @@ class ExplicitCurrentDenialIntegrationTests(unittest.TestCase):
         self.assertTrue(any('[CURRENT] self.name: Eira' in text for text in self.views()))
         self.assertTrue(all('CURRENT UNVERIFIED' not in text for text in self.views()))
 
+    def test_same_source_later_denial_and_withdrawal_unverify_without_inventing_state(self):
+        for index, tail in enumerate(('My name is not Eira.', 'My registered name Eira has been revoked.')):
+            with self.subTest(tail=tail):
+                base = 1735689600000 + index * 10000
+                self.add('My name is Vesper.', base - 1000)
+                source = 'My name is Eira. ' + tail
+                self.add(source, base)
+                for text in self.views():
+                    self.assertIn('CURRENT UNVERIFIED', text)
+                    self.assertIn(tail, text)
+                    self.assertNotIn('[CURRENT] self.name: Eira', text)
+
+    def test_same_source_prior_denial_cannot_unverify_later_assertion(self):
+        self.add('My name is Vesper.', 1735689599000)
+        self.add('My name is not Eira. My name is Eira.', 1735689600000)
+        self.assertTrue(any('[CURRENT] self.name: Eira' in text for text in self.views()))
+        self.assertTrue(all('CURRENT UNVERIFIED' not in text for text in self.views()))
+
+    def test_ambiguous_repeated_assertion_does_not_locate_a_within_source_tail(self):
+        self.add('My name is Vesper.', 1735689599000)
+        self.add('My name is Eira. My name is not Eira. My name is Eira.', 1735689600000)
+        self.assertTrue(any('[CURRENT] self.name: Eira' in text for text in self.views()))
+        self.assertTrue(all('CURRENT UNVERIFIED' not in text for text in self.views()))
+
+    def test_quoted_or_reported_same_source_tail_is_not_a_user_denial(self):
+        for index, tail in enumerate(('The visitor said:\nMy name is not Eira.',
+                     '"My name is not Eira."',
+                     'Example:\nMy name is not Eira.',
+                     'If approved, my name is not Eira.')):
+            with self.subTest(tail=tail):
+                base = 1735689600000 + index * 10000
+                self.add('My name is Vesper.', base - 1000)
+                self.add('My name is Eira.\n' + tail, base)
+                self.assertTrue(any('[CURRENT] self.name: Eira' in text for text in self.views()))
+                self.assertTrue(all('CURRENT UNVERIFIED' not in text for text in self.views()))
+
+    def test_compound_name_denial_uses_only_literal_name_and_keeps_original(self):
+        self.add('My name is Vesper.', 1735689599000)
+        original = 'My name is Eira, and I live in Northmere.'
+        self.add(original, 1735689600000)
+        self.add('My name is not Eira.', 1735689601000)
+        for text in self.views():
+            self.assertIn('CURRENT UNVERIFIED', text)
+        with self.memory._connect() as connection:
+            self.assertEqual(connection.execute('SELECT content FROM items WHERE content=?',
+                (original,)).fetchone()[0], original)
+
+    def test_within_source_qualification_keeps_exact_rid_role_timestamp_and_spans(self):
+        from test_rerank_store import S
+        source = 'My name is Eira.\n  My name is not Eira.\nOrdinary unrelated note.'
+        self.add(source, 1735689600000)
+        with self.memory._connect() as connection:
+            assertion = connection.execute("SELECT * FROM facts WHERE user_id='target'"
+                " AND predicate='name' AND status='active'").fetchone()
+            attributed = S.fact_layer._with_source(connection, assertion, True)
+            evidence = S.fact_layer._applicability_evidence(connection, 'target', attributed, {})
+        self.assertEqual(len(evidence), 1)
+        item = evidence[0]
+        self.assertEqual(item['source_rid'], assertion['source_rid'])
+        self.assertEqual(item['role'], 'user')
+        self.assertEqual(item['timestamp_origin'], 'message.timestamp')
+        self.assertEqual(item['created_at'], 1735689600)
+        self.assertEqual(item['assertion_source_pos'], 0)
+        self.assertEqual([source[start:end].strip() for start, end in item['source_char_spans']],
+                         [item['text']])
+        self.assertTrue(all(start > item['assertion_source_pos'] for start, _ in item['source_char_spans']))
+
+    def test_within_source_qualification_does_not_cross_unknown_scope_units(self):
+        for index, barrier in enumerate((
+                'The visitor stated:', 'The visitor claimed:', 'Examples:',
+                'If the permit is approved:', 'If the permit is approved,',
+                'A newly quoted diary follows:', 'Unrelated ordinary narration.')):
+            with self.subTest(barrier=barrier):
+                base = 1735689600000 + index * 10000
+                self.add('My name is Vesper.', base-1000)
+                self.add('My name is Eira.\n'+barrier+'\nMy name is not Eira.', base)
+                self.assertTrue(any('[CURRENT] self.name: Eira' in text for text in self.views()))
+                self.assertTrue(all('CURRENT UNVERIFIED' not in text for text in self.views()))
+
 
 if __name__ == '__main__':
     unittest.main()

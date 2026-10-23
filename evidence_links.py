@@ -15,6 +15,7 @@ _LABELS = {
     "dataset": r"data[ _-]?sets?|jeu\s+de\s+donn[ée]es|conjunto\s+de\s+datos|数据集|資料集",
     "project": r"projects?|projet|proyecto|项目|專案",
     "protocol": r"protocols?|protocole|protocolo|协议|協議|规程|規程",
+    "method": r"methods?|procedures?|algorithms?|方法|算法|流程",
 }
 _TYPED_ID = re.compile(
     r"(?<![A-Za-z0-9_])(?P<label>" + "|".join(
@@ -234,6 +235,8 @@ def select_linked_sources(
 
     Only identifiers present in the query AND a seed source may be followed.
     Typed identifiers are matched as (dataset/project/protocol, literal value).
+    Method/procedure/algorithm labels share a method namespace. The same
+    query-and-seed anchoring and literal-ID guards apply to these sources.
     Bare references require a known, unambiguous structured ID (digits or
     separated upper-case/multipart identifiers), not an ordinary person name;
     plain names require an explicit typed ID in each source. New sources do not

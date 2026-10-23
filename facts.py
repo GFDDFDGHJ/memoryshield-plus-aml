@@ -378,6 +378,24 @@ _ASSERTION_DIRECT_CORRECTION = re.compile(
     r'^\s*(?:(?:actually|correction|in\s+fact)\s*[:,]?\s*(?=(?:I|my)\b)|'
     r'(?:其实|更正[:：]?|实际上)\s*(?=我))', re.I)
 
+# A second explicit first-person clause is not part of the first attribute's
+# literal value. Keep geographical/name commas and literal quoted values intact.
+_ASSERTED_VALUE_BOUNDARY = re.compile(
+    r'(?:,\s*(?:(?:and|but|while|whereas|yet|so)\s+)?|'
+    r'\s+(?:and|but|while|whereas|yet|so)\s+)'
+    r'(?=I\s+(?:am|live|reside|work|have|do|like|love|prefer|enjoy|moved|'
+    r'relocated|no\s+longer)\b|I[\x27’]m\b|'
+    r'my\s+[^,.!?\n]{1,40}?\s+(?:is|are)\b)', re.I)
+
+
+def _asserted_literal_value(value: str) -> str:
+    """Bound a derived fact at a new self clause, without editing its source."""
+    quotes = [(match.start(), match.end()) for match in _ASSERTION_QUOTES.finditer(value)]
+    for boundary in _ASSERTED_VALUE_BOUNDARY.finditer(value):
+        if not any(start <= boundary.start() < end for start, end in quotes):
+            return value[:boundary.start()]
+    return value
+
 
 def _assertion_header_spans(text: str) -> list[tuple[int, int]]:
     """Find explicit quoted/example header scopes in one forward source pass.
@@ -509,6 +527,8 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
             return  # A hypothetical self-description is not a current fact.
         if kind != "rule" and not structured and not asserted_position(source_pos):
             return
+        if kind == "fact" and operation == "assert" and not structured:
+            value = _asserted_literal_value(value)
         value = _clean(value)
         if not (_rule_ok(value) if kind == "rule" else _ok(value)):
             return
@@ -1114,8 +1134,51 @@ def _applicability_evidence(conn, user_id: str, assertion: dict, cache: dict) ->
             except (TypeError, ValueError, OverflowError):
                 pass
         return source['seq'] > assertion.get('seq', float('inf'))
+    same = next((source for source in cache[sources_key]
+                 if source['rid'] == assertion['source_rid']), None)
+    within_source = []
+    if same:
+        # A RID can contain several ordered statements. Recover the assertion
+        # location only when its exact key/value identifies one positive match;
+        # duplicates are ambiguous because derived rows do not persist offsets.
+        candidates = [fact for fact in extract_facts(same['content'], relaxed=(role == 'system'))
+                      if fact.operation == 'assert'
+                      and (fact.subject, fact.predicate) == (assertion['subject'], assertion['predicate'])
+                      and fact.value.casefold() == str(assertion['value']).casefold()]
+        if len(candidates) == 1:
+            position = candidates[0].source_pos
+            spans = dependency_layer.source_sentence_spans(same['content'])
+            sentences = [same['content'][start:end].strip() for start, end in spans]
+            containing = next((index for index, (start, end) in enumerate(spans)
+                               if start <= position < end), None)
+            quote_spans = [(match.start(), match.end())
+                           for match in _ASSERTION_QUOTES.finditer(same['content'])]
+            header_spans = _assertion_header_spans(same['content'])
+            if containing is not None:
+                for qualification in state_layer.qualification_indexes(
+                        assertion['subject'], assertion['predicate'], assertion['value'], sentences):
+                    indexes = qualification['sentence_indexes']
+                    # Do not carry an attribution/condition over an unknown
+                    # intervening unit. Unlike later independent records, an
+                    # indented or headed tail may still be reported speech or
+                    # a conditional block. Only the immediately adjacent
+                    # complete qualification (or existing adjacent pair) is
+                    # positively scoped enough for this within-record path.
+                    if not indexes or min(indexes) != containing + 1:
+                        continue
+                    starts = [spans[index][0] + len(same['content'][spans[index][0]:spans[index][1]])
+                              - len(same['content'][spans[index][0]:spans[index][1]].lstrip())
+                              for index in indexes]
+                    if any(_assertion_header_block(same['content'], start, header_spans)
+                           or any(left <= start < right for left, right in quote_spans)
+                           for start in starts):
+                        continue
+                    within_source.append({**same, 'reason': qualification['reason'],
+                        'sentence_indexes': list(indexes), 'assertion_source_pos': position,
+                        'source_char_spans': [list(spans[index]) for index in indexes],
+                        'text': '\n'.join(sentences[index] for index in indexes)})
     later = (source for source in cache[sources_key] if is_later(source))
-    cache[key] = state_layer.qualifications(assertion, later)
+    cache[key] = (within_source + state_layer.qualifications(assertion, later))[:4]
     return cache[key]
 
 
@@ -2248,6 +2311,9 @@ def _pack_context(
               "coverage={coverage}. Source sequence is provenance, not inferred event chronology. "
               "Timestamp origins below determine whether relative-time anchoring is available.\n")
     presentation_order = None
+    response_policies = {index for index, unit in enumerate(units)
+                         if scope == 'global' and unit.get('context_response_policy')
+                         and not (unit.get('context_qualification') or unit.get('context_schema'))}
 
     def render(indices):
         chosen_indices = sorted(indices) if presentation_order is None else [index for index in presentation_order if index in indices]
@@ -2256,6 +2322,10 @@ def _pack_context(
             return []
         coverage = "complete for selected source scope" if len(chosen) == total else "truncated; do not treat as complete statistics"
         prefix = header.format(included=len(chosen), coverage=coverage)
+        policy_count = len(response_policies.intersection(indices))
+        if policy_count < len(response_policies):
+            prefix += (f"Presentational response-policy coverage={policy_count}/{len(response_policies)}; "
+                       "response policies omitted; do not assume omitted policies were followed.\n")
 
         def assemble(pieces):
             count = min(limit, len(pieces))
@@ -2284,7 +2354,8 @@ def _pack_context(
         return selected(full, range(total))
 
     required = {index for index, unit in enumerate(units)
-                if unit.get('context_qualification') or unit.get('context_schema') or unit.get('context_dependency')}
+                if (unit.get('context_qualification') or unit.get('context_schema')
+                    or unit.get('context_dependency')) and index not in response_policies}
     required_view = render(required)
     if required and sum(map(len, required_view)) > budget_chars:
         # An incomplete validity restriction cannot accompany apparently
@@ -2318,6 +2389,29 @@ def _pack_context(
             intervals = following
         return out
 
+    # Response manner is evidence too, but its complete historical catalogue
+    # is not a prerequisite for reading the user's history. Keep a bounded,
+    # attributed sample before that history. Data validity, schema, execution,
+    # privacy and epistemic guards never enter this presentational-only set.
+    # Omitted policies remain disjoint source units for the continuation; the
+    # header explicitly prevents interpreting this sample as full compliance.
+    if response_policies:
+        representatives = {}
+        for index in sorted(response_policies):
+            representatives.setdefault(units[index]['source_rid'], index)
+        policy_order = spread(representatives.values())[:128]
+        base_chars = sum(map(len, required_view))
+        policy_allowance = budget_chars // 4
+        for index in policy_order:
+            trial = render(required | {index})
+            trial_chars = sum(map(len, trial))
+            if trial_chars <= budget_chars and trial_chars-base_chars <= policy_allowance:
+                required.add(index)
+                required_view = trial
+        deferred_policies = response_policies - required
+    else:
+        deferred_policies = set()
+
     sources, sessions = {}, {}
     for index, unit in enumerate(units):
         source = unit['source_rid']
@@ -2343,7 +2437,7 @@ def _pack_context(
     priority = []
     for rank in range(max(map(len, source_queues), default=0)):
         for queue in source_queues:
-            if rank < len(queue) and queue[rank] not in required:
+            if rank < len(queue) and queue[rank] not in required and queue[rank] not in deferred_policies:
                 priority.append(queue[rank])
     # Fair session traversal alone can spend a small budget on each session's
     # first turn before ever reaching the end of the filtered history. Reserve
@@ -2358,7 +2452,8 @@ def _pack_context(
         salient = [index for index in priority if units[index].get('context_salient')]
     else:
         salient = []
-    priority = list(dict.fromkeys(index for index in salient + endpoints + priority if index not in required))
+    priority = list(dict.fromkeys(index for index in salient + endpoints + priority
+                                  if index not in required and index not in deferred_policies))
     if scope == 'global':
         # Repeated background can fill a whole continuation before a new
         # statement buried in a later turn is visited. This changes scheduling
@@ -2574,6 +2669,43 @@ _SYNTHESIS_SALIENCE = re.compile(
     r"due\s+to|no\s+longer|withdraw\w*|revok\w*|correct\w*)\b"
     r"|决定|选择|取舍|否决|改为|改成|因为|由于|不再|撤销|撤回|更正", re.I)
 
+_PRESENTATIONAL_POLICY_PREFIX = re.compile(
+    r"^\s*(?:(?:for|in)\s+(?:all|every|each)\s+(?:(?:future|subsequent)\s+)?"
+    r"(?:responses?|replies|answers?|outputs?)\s*[:,]?\s*|"
+    r"(?:please\s+)?(?:always|never|from\s+now\s+on)\s+)", re.I)
+_PRESENTATIONAL_POLICY_BODY = re.compile(
+    r"(?:reply|respond|answer|write|output)\s+in\s+(?:English|Spanish|Chinese|French|German|"
+    r"Japanese|Korean|JSON|YAML|XML|CSV|Markdown|plain\s+text|bullet\s+points|"
+    r"(?:(?:at\s+most|no\s+more\s+than|up\s+to|exactly)\s+)?"
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a\s+single)\s+"
+    r"(?:words?|sentences?|lines?|paragraphs?|bullet\s+points?))"
+    r"|(?:keep|make)\s+(?:(?:the|your|all)\s+)?(?:explanations?|responses?|replies|answers?|outputs?)\s+"
+    r"(?:concise|brief|short|formal|informal|friendly|neutral|polite)"
+    r"|(?:use|maintain|adopt|preserve)\s+(?:(?:a|an|the)\s+)?"
+    r"(?:(?:concise|brief|short|formal|informal|friendly|neutral|polite|calm|warm|direct|clear|"
+    r"simple|conversational|professional|courteous)\s+){1,4}(?:style|tone)(?:\s+convention)?"
+    r"|(?:use|maintain|adopt)\s+(?:(?:a|an|the)\s+)?(?:JSON|YAML|XML|CSV|Markdown|plain\s+text)\s+format"
+    r"|(?:use|maintain|adopt)\s+(?:(?:a|an|the)\s+)?(?:APA|MLA|Chicago|Harvard|IEEE|Vancouver|AMA|ACS)\s+citation\s+style"
+    r"|(?:use|include|avoid|omit)\s+(?:(?:numbered|short|descriptive)\s+)?(?:headings|bullet\s+points|paragraph\s+breaks)",
+    re.I)
+_SUBSTANTIVE_POLICY = re.compile(
+    r"\b(?:data|schema|columns?|rows?|tables?|observations?|measurements?|readings?|samples?|"
+    r"trials?|results?|values?|valid\w*|eligib\w*|exclud\w*|missing|protocols?|procedures?|"
+    r"execut\w*|operations?|steps?|order|sequence|repeat\w*|skip\w*|units?|metric|convert\w*|"
+    r"privacy|private|personal|sensitive|addresses?|secrets?|passwords?|codes?|redact\w*|"
+    r"uncertain\w*|confidence|factual|facts?|inferen\w*|evidence|unsupported|assumptions?|"
+    r"verif\w*|accurac\w*|truth|correct\w*|withdraw\w*|revok\w*|sources?)\b"
+    r"|数据|表格|列名|观测|测量|读数|样本|有效|资格|排除|缺失|协议|流程|步骤|执行|顺序|重复|跳过"
+    r"|单位|转换|隐私|私人|个人|敏感|地址|秘密|密码|口令|脱敏|不确定|置信|事实|推断|证据|假设|核实|准确|撤回|撤销|来源", re.I)
+
+
+def _presentational_response_policy(text: str) -> bool:
+    """Finite presentational grammar; unknown modifiers remain hard evidence."""
+    if _SUBSTANTIVE_POLICY.search(text):
+        return False
+    prefix = _PRESENTATIONAL_POLICY_PREFIX.match(text)
+    return bool(prefix and _PRESENTATIONAL_POLICY_BODY.fullmatch(text[prefix.end():].strip().rstrip('.!。！').strip()))
+
 
 def excluded_table_segments(rows, exclusions) -> dict[int, set[int]]:
     """Pure original-source positions belonging to an explicitly private table."""
@@ -2634,6 +2766,8 @@ def context_units_for_query(rows, query: str) -> list[dict]:
                 if (row.get('role') in {'user', 'system'} and sentence not in protected_policies
                         and _global_response_rule(sentence)):
                     unit['context_dependency'] = True
+                    if _presentational_response_policy(sentence):
+                        unit['context_response_policy'] = True
                     protected_policies.add(sentence)
             units.append(unit)
             scores[row["session_id"]] = max(scores.get(row["session_id"], 0), overlap)

@@ -16,6 +16,58 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## v3.14.0: assertion boundaries, procedure inputs and bounded policy coverage
+
+This medium update repairs independently reproduced evidence gaps. It keeps
+the embedding model, reranker, storage schema and public routes unchanged.
+All development inputs are invented; official raw evaluation data are not read.
+
+- A derived first-person fact ends at an explicit new self clause. This lets
+  a later exact retraction match the location, employer or name rather than a
+  value accidentally containing a second assertion. Original source text,
+  quoted literal values and structured fields are preserved. A unique
+  assertion can also carry an immediately following, complete denial or
+  revocation from the same source as applicability evidence. Intervening
+  narration or headers form a barrier; no replacement value is inferred.
+- Explicitly headed procedures can retain unique `Rule LABEL:` operations
+  and one or two labelled initial declarations between the heading and list.
+  Mixed labels, duplicates, narration, blank lines and privacy gaps cannot
+  connect separate scopes. Inputs before the heading remain unattached.
+- Literal method IDs link earlier schema, units and eligibility conditions
+  to a new case. Method/procedure/algorithm labels share one namespace,
+  separate from dataset, protocol and project IDs. Both query and retrieved
+  seed must carry the same ID; ordinary names and transitive references are
+  not followed. Source role, boundaries and privacy exclusions still apply.
+- Under a truncated global-summary budget, a finite grammar of language,
+  formatting and known tone preferences receives a bounded sample. The
+  header discloses included/total policy coverage and warns about omissions.
+  Privacy, precision, uncertainty, execution and unknown policy wording
+  remain mandatory. Omitted source units remain in continuation results;
+  dedicated rule queries retain their existing behavior. Global synthesis
+  at Top K 8 or above also reserves a digest candidate before final packing,
+  so a full list of extracted rules cannot prevent source-summary generation.
+  Final response count and character limits still apply. Tiny Top K and
+  complete source views retain their previous behavior.
+
+Frozen independent checks improve five of seventeen state cases (8/17 to
+13/17), three procedure variants from 2/5 to 5/5 required original inputs,
+and four method-transfer variants from 2/4 to 4/4 background literals in
+both the full return and an 8k prefix. A new 120-rule catalogue using only
+known presentational wording improves topic coverage from 0/8 to 8/8 in
+8k and 16k prefixes. Opaque style labels and mixed uncertainty rules remain
+hard evidence and can still exhaust the budget. Several possessive aliases,
+non-adjacent same-source qualifications and implicit unnamed transfer remain
+unsupported. These are retrieval measurements, not predicted official scores.
+
+All 37 isolated scripts pass on the frozen sources. Both fixed 47-case
+cached-v4 seeds retain their previous evidence and prefix contracts without
+regressions. Extended-context, state, data and long-source controls retain
+8/8, 12/12, 9/9 and 6/6 complete-evidence contracts. The 16-worker offline
+check has no errors, literal failures or cross-user leakage. Independent
+reviews cover attribution/condition barriers, typed ID namespaces, privacy
+gaps and hard-policy classification. Exact new public fixtures also pass
+against fresh offline storage before deployment.
+
 ## v3.13.0: complete personal overviews, empirical tables and scoped rules
 
 This medium update extends evidence retrieval without changing the embedding
