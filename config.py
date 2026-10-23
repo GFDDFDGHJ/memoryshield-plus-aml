@@ -65,7 +65,7 @@ class Config:
     extended_context_chars: int = int(os.environ.get("AML_EXTENDED_CONTEXT_CHARS", "160000"))
     context_continuation_chars: int = int(os.environ.get("AML_CONTEXT_CONTINUATION_CHARS", "128000"))
     # Optional semantic second-stage ranking; a timeout or invalid response
-    # retains exact cosine order. This does not generate memory or answers.
+    # retains deterministic dense/sparse recall. This does not generate answers.
     rerank_enabled: bool = _bool("AML_RERANK", False)
     rerank_model: str = os.environ.get("AML_RERANK_MODEL", "qwen3-rerank")
     rerank_base_url: str = os.environ.get("AML_RERANK_BASE_URL", "https://dashscope.aliyuncs.com/api/v1")
@@ -94,7 +94,7 @@ class Config:
     # --- Server ---
     host: str = os.environ.get("AML_HOST", "0.0.0.0")
     port: int = int(os.environ.get("AML_PORT", "8080"))
-    version: str = os.environ.get("AML_VERSION", "2026.10.23-rc8")
+    version: str = os.environ.get("AML_VERSION", "v3.9.0")
 
 
 CONFIG = Config()

@@ -16,6 +16,66 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## v3.9.0: late arrivals, execution evidence and explicit tables
+
+This is a medium update from v3.8.0 (previously labelled v3.8 / rc8). The
+embedding model, optional reranker, routes, credentials and database schema
+are unchanged. All new diagnostics use invented data and temporary databases;
+no official messages, questions, answers or raw traces were inspected.
+
+- On Add, the affected single-valued fact key is replayed independently by
+  source role. If every relevant utterance has a provided message timestamp,
+  timestamp, source sequence and sentence position establish assertion order.
+  Mixed or unknown origins retain source sequence; this is not event-date
+  inference. Same-value reassertions retain distinct source pointers. No full
+  database migration or search-time global replay is introduced.
+- Current, historical-value and profile views quote explicit later governance
+  evidence with `CURRENT UNVERIFIED`. They do not apply a condition or infer
+  a new value. Completed withdrawal and same-source affirmative outcome
+  controls differ from denied, hypothetical, question, nickname and other-role
+  controls. Unsupported forms remain ordinary source evidence.
+- Operational grammar distinguishes instructions to execute/skip rules from
+  notebook mentions of those words. Long previews prioritize complementary,
+  less-repeated literal spans; whole exceptions and protocol constraints still
+  obey the budget or receive an incomplete-evidence notice. Saturated/failed
+  optional reranking retains dense/sparse recall rather than only dense order.
+- Explicit delimited table schemas can be before or after a contiguous block.
+  Declared NA cells do not end that block. Cross-session association requires
+  an explicit same-dataset schema reference and one unambiguous prior schema.
+  Namespace, role, personal-field and original segment/sequence boundaries
+  are negative controls. No missing value is filled or observation merged.
+- Identifier background preserves technical unit pronouns and an adjacent
+  Otherwise branch, while actual personal details still stop the quote.
+
+The frozen nine-case data diagnostic improves from 3/9 to 9/9 complete-return
+contracts. The same 223-record table has all 143 eligible original records
+when its schema is first, last, or explicitly shared across sessions; one
+declared missing cell yields the independently expected 142. This does not
+claim that all observations fit every 8k/16k prefix. Prefix coverage is
+reported separately, and oversized histories remain bounded.
+
+The unchanged 47-case evaluator with both cached real-v4 seeds retains every
+previous required literal, source-fidelity, role and rank check: 42/47 strict,
+291/306 literals at 8k and 306/306 at 16k. Existing extended-context and state
+contracts remain 8/8 and 12/12. Five new synthetic qwen3-rerank requests were
+prepared separately; offline complete-request replay improves the six frozen
+long-source evidence cases from 3/6 to 5/6. The linked long-source background
+case still misses necessary units, and earlier narrative/procedural failures
+remain disclosed. These are evidence checks, not generated-answer accuracy.
+
+An independent controlled-slot check retains an old method at rank 2 when all
+eight provider slots are busy (previously rank 9); the available provider
+places it at rank 1. This reduces evidence loss without claiming identical
+orders or assuming an official context-prefix limit. A temporary 4.1-million
+character user history plus 16 simultaneous Add requests completes in 13.99s
+in the local controlled-vector environment, with no lock errors and correct
+final state. Source replay increases Add cost with history length; this is not
+a live provider latency guarantee. Legacy incorrect state is repaired when
+that attribute next receives Add, rather than by an unsolicited bulk rewrite.
+
+Known privacy limitation: explicit exclusion of names is not yet recognized by
+the field-exclusion grammar; paired checks show the same limitation in v3.8.0.
+
 ## rc8: source qualifications and repeated-background pressure
 
 The new fixed diagnostics use invented conversations only. No official memory,

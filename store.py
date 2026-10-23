@@ -350,14 +350,7 @@ def _query_preview(text: str, query: str, budget: int = 3000, *, source_text: st
         return None
     # Document-wide execution controls qualify every selected rule. They need
     # not repeat a requested variable, and can occur after the rule bodies.
-    procedure_subject = re.compile(
-        r"\b(?:rules?|steps?|instructions?|operations?|algorithm|execution|procedure)\b"
-        r"|规则|步骤|指令|操作|算法|执行", re.I)
-    procedure_control = re.compile(
-        r"\b(?:order|sequence|once|times?|passes?|iterations?|repeat\w*|revisit\w*|"
-        r"skip\w*|stop\w*|return|before|after)\b|顺序|次序|一次|遍历|重复|跳过|终止|回到", re.I)
-    protocol = {index for index,part in enumerate(units)
-                if procedure_subject.search(part) and procedure_control.search(part)}
+    protocol = dependency_layer.execution_control_indexes(units)
     for index in tuple(protocol):
         following = index + 1
         while (following < len(units) and source_adjacent(following - 1, following)
@@ -380,7 +373,9 @@ def _query_preview(text: str, query: str, budget: int = 3000, *, source_text: st
             spans = [span for span in spans if span[3] not in protocol]
     while spans and remaining >= 150:
         best = max(range(len(spans)), key=lambda i: (
-            len(spans[i][2] - covered), len(spans[i][2]), -spans[i][0]))
+            len(spans[i][2] - covered), -original_counts[units[spans[i][3]]],
+            len(spans[i][2]) / max(1, len(fact_layer._tokens(spans[i][1]))),
+            len(spans[i][2]), -spans[i][0]))
         at, piece, overlap, unit = spans.pop(best)
         if not overlap:
             break
@@ -983,6 +978,16 @@ class MemoryStore:
         # Interleave recall paths before applying the provider input ceiling;
         # trimming a long pool must not remove every sparse-only candidate.
         interleaved = [pair for pair_group in zip(ranked, sparse) for pair in pair_group]
+        fallback, fallback_ids = [], set()
+        for pair in interleaved:
+            if pair[1]['rid'] not in fallback_ids:
+                fallback.append(pair)
+                fallback_ids.add(pair[1]['rid'])
+        # Keep both recall paths when the optional provider is busy or fails.
+        # Falling all the way back to dense rank would strand an older
+        # definition behind many nearly identical new observations.
+        if all(a[1]['rid'] == b[1]['rid'] for a, b in zip(fallback, ranked)):
+            fallback = ranked
         for pair in interleaved:
             if len(head) >= 64:
                 break
@@ -997,16 +1002,16 @@ class MemoryStore:
             ranking_documents[pair[1]['rid']] = document
             weighted_size += needed
         if len(head) < 2:
-            return ranked
+            return fallback
         documents = [ranking_documents[row['rid']] for _, row in head]
         try:
             order = client.rerank(query, documents)
             if (not isinstance(order, list) or len(order) != len(head)
                     or any(type(index) is not int for index in order)
                     or set(order) != set(range(len(head)))):
-                return ranked
+                return fallback
         except Exception:
-            return ranked
+            return fallback
         return [head[index] for index in order] + [pair for pair in ranked if pair[1]["rid"] not in selected_ids]
 
     def _search_raw(

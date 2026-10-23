@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **2026.10.23-rc8**. Repository:
+Candidate version: **v3.9.0**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -9,6 +9,10 @@ the platform handles answering and scoring.
 
 This is a release candidate. The public repository and running API must be
 updated to the same version, then pass the official Smoke before Full.
+
+Versions use `vMAJOR.MINOR.PATCH`: large changes increment MAJOR, medium
+changes increment MINOR, and small changes increment PATCH. Incrementing a
+higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
 
 ## Method and models
 
@@ -26,8 +30,10 @@ updated to the same version, then pass the official Smoke before Full.
   the embedding key. Direct launches can provide a separate `AML_RERANK_API_KEY`.
   `AML_RERANK_BASE_URL`, `AML_RERANK_MODEL` and `AML_RERANK_TIMEOUT` configure
   the native DashScope client. Defaults are Beijing, qwen3-rerank and 6 seconds.
-  Missing credentials, provider errors, exhausted concurrency or invalid ranks
-  preserve the exact prior order. Only disposable ranking copies are truncated;
+  Provider errors, exhausted concurrency or invalid ranks retain deterministic
+  dense/sparse interleaving, keeping rare older definitions near observations.
+  Disabled ranking and explicit state/chronology guards retain their original
+  paths. Only disposable ranking copies are truncated;
   returned evidence retains original wording, role and source provenance.
 - Query planning separates explicit private-field exclusions from retrieval
   topics. Personal-history synthesis uses operation and scope grammar; named
@@ -56,6 +62,16 @@ updated to the same version, then pass the official Smoke before Full.
   and assistant assertions update their own role's history. Existing facts with
   unknown roles are repaired lazily from their original sources for the current
   user's affected attribute; genuine retractions remain retracted.
+- Single-valued facts with comparable provided message timestamps replay in
+  source-time order when a new assertion arrives late. Mixed/unknown timestamp
+  origins keep source order. Reassertions keep their own source pointers.
+  Later explicit self-attribute qualifications label applicability unverified
+  and quote the later source; the service does not infer a replacement value.
+- Explicit delimited schemas can precede or follow a contiguous observation
+  block. Declared missing cells retain their literal spelling. A new session
+  inherits a schema only through an explicit same-dataset reference to one
+  unambiguous earlier declaration. Roles, hidden gaps and topic boundaries stop
+  expansion; schemas and validity conditions are scheduled before data rows.
 - Summary evidence is assembled from original source messages at query time.
   Topic requests select source spans while retaining connected evidence;
   global requests can cover all sessions. Repeated numeric observations are

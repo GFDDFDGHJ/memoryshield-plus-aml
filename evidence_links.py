@@ -44,6 +44,12 @@ _UNIT_BOUNDARY = re.compile(r"(?<=[.!?。！？])\s+|(?<=[。！？])(?=\S)|(?<=
 _PERSONAL_CLAUSE = re.compile(
     r"^(?:(?:my|his|her|their|your|mon|ma|mes|mi|mis|meu|minha)\b|"
     r"[A-Z][a-z]+['’]s\b|我(?:的)?|他(?:的)?|她(?:的)?)", re.I)
+_TECHNICAL_POSSESSIVE = re.compile(r"^(?:their|its)\s+(?:units?|columns?|fields?|dimensions?)\b", re.I)
+_PERSONAL_ASSIGNMENT = re.compile(
+    r"\b(?:my|his|her|their|your|our)\s+(?:(?:private|personal|home|mobile|medical)\s+){0,2}"
+    r"(?:address|phone|telephone|email|passcode|password|account|diagnosis|code)(?:\s+number)?\s*(?:is|are|[:=])\s*\S"
+    r"|(?:我的|他的|她的|他们的|你的)(?:私人|家庭)?(?:地址|住址|电话|手机号|邮箱|密码|诊断)(?:是|为|[:：])\s*\S", re.I)
+_ELSE_PREFIX = re.compile(r"^\s*otherwise\b|^\s*否则", re.I)
 _CONTROL_PREFIX = re.compile(
     r"^(?:only|unless|provided|if|when|before|after|exclude\w*|ignore\w*|"
     r"except\w*|do\s+not|never|must|valid|otherwise|however|but)\b"
@@ -109,7 +115,7 @@ def _background_quote(content: str, links: list[dict]):
         def background(part: str, *, continuation: bool = False):
             types = {kind for kind, pattern in _DEPENDENCIES.items() if pattern.search(part)}
             strong = types & {"schema", "calibration", "definition"}
-            if _PERSONAL_CLAUSE.search(part.strip()):
+            if personal_boundary(part):
                 return set()
             if strong:
                 return types
@@ -118,6 +124,17 @@ def _background_quote(content: str, links: list[dict]):
             if "condition" in types and (_CONTROL_PREFIX.search(part) or _DOMAIN_NOUN.search(part)):
                 return types
             return {"condition"} if continuation else set()
+
+        def personal_boundary(part: str):
+            # 'Their units' refers to already declared columns, not people.
+            # The narrow exception requires prior schema evidence and never
+            # admits an embedded personal field/value assignment.
+            if _PERSONAL_ASSIGNMENT.search(part):
+                return True
+            if not _PERSONAL_CLAUSE.search(part.strip()):
+                return False
+            return not ("schema" in evidence and _TECHNICAL_POSSESSIVE.search(part.strip())
+                        and _DEPENDENCIES["schema"].search(part))
 
         types = background(stripped)
         if (not types and len(typed) > 1
@@ -134,9 +151,10 @@ def _background_quote(content: str, links: list[dict]):
             _, _, part = units[following]
             if _mentions(part):
                 break
-            if _PERSONAL_CLAUSE.search(part.strip()):
+            if personal_boundary(part):
                 break
-            continuation = qualifying and bool(_topics(previous) & _topics(part))
+            continuation = qualifying and (bool(_topics(previous) & _topics(part))
+                                            or bool(_ELSE_PREFIX.search(part)))
             types = background(part, continuation=continuation)
             if not types and "schema" in evidence and _UNIT_VALUE.search(part):
                 types = {"schema"}

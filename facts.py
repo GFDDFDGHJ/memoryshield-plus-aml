@@ -11,8 +11,8 @@ several capabilities that raw retrieval structurally cannot serve:
 
 So at Add time we also mine (subject, predicate, value) triples with regexes,
 and at Search time we prepend a pinned profile plus the facts that match the
-query. Everything here is deterministic and microsecond-scale; Add does not get
-slower in any way the platform can notice.
+query. Extraction and source replay are deterministic; their cost is measured
+with synthetic concurrent Add/Search checks before release.
 
 Conflict handling is deliberately narrow: a new value only retires the *same*
 (user, subject, predicate) triple. This is the fix for the old governance rule,
@@ -22,7 +22,10 @@ which did LIKE '%<topic>%' and hid 1480 of 3974 rows because it extracted
 from __future__ import annotations
 
 import json
+import math
 import re
+import state_evidence as state_layer
+import context_data as data_layer
 from collections import Counter
 import evidence_links as link_layer
 import query_plan as query_layer
@@ -567,10 +570,13 @@ def store_facts(
     source_role = str(role or "unknown")
     written = 0
     prepared_keys = set()
+    chronology_keys = set()
     for f in facts:
         if (f.subject, f.predicate) not in prepared_keys:
             _resolve_legacy_roles(conn, user_id, f.subject, f.predicate, before_seq=seq)
             prepared_keys.add((f.subject, f.predicate))
+        if f.kind == "fact" or f.subject == "favorite":
+            chronology_keys.add((f.subject, f.predicate))
         if f.operation == "retract":
             # Negating an old employer is not an assertion of a new location.
             # Match the named value exactly so denying an older state cannot
@@ -626,6 +632,11 @@ def store_facts(
              f.confidence, previous, created_at, seq, source_role),
         )
         written += 1
+    for subject, predicate in chronology_keys:
+        # Reconcile only this message's affected attribute and speaker. A late
+        # Add is not evidence that its utterance occurred after prior Adds.
+        written += _replay_fact_chronology(conn, user_id, subject, predicate, source_role,
+                                           source_rid=source_rid)
     return written
 
 
@@ -656,6 +667,100 @@ def _has_items(conn: sqlite3.Connection) -> bool:
 def _timestamp_column(conn: sqlite3.Connection) -> str:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(items)")}
     return "timestamp_origin" if "timestamp_origin" in columns else "'legacy-unknown' AS timestamp_origin"
+
+
+def _replay_fact_chronology(conn: sqlite3.Connection, user_id: str, subject: str,
+                            predicate: str, source_role: str, *, source_rid: int | None = None) -> int:
+    """Replay one single-valued key from its retained source utterances.
+
+    Only a complete set of explicit message timestamps is comparable. Mixed
+    or unknown origins retain source order; a timestamp never becomes the
+    occurrence date of an event described inside the utterance. Reassertions
+    and retractions are replayed as distinct source evidence, including when
+    an earlier implementation did not store a duplicate derived assertion.
+    This runs only for an affected Add key, never as a global migration.
+    """
+    if not _has_items(conn):
+        return 0
+    timestamp_column = _timestamp_column(conn)
+    if timestamp_column != 'timestamp_origin':
+        return 0
+    explicit_source = conn.execute(
+        "SELECT 1 FROM items WHERE user_id=? AND role=? AND status='active'"
+        " AND timestamp_origin='message.timestamp' AND (rid=? OR rid IN ("
+        "SELECT source_rid FROM facts WHERE user_id=? AND subject=? AND predicate=? AND source_role=?)) LIMIT 1",
+        (user_id,source_role,source_rid,user_id,subject,predicate,source_role),
+    ).fetchone()
+    if not explicit_source:
+        return 0
+    sources = conn.execute(
+        "SELECT rid,user_id,session_id,role,content,created_at,seq," + timestamp_column
+        + " FROM items WHERE user_id=? AND role=? AND status='active' ORDER BY seq,rid",
+        (user_id, source_role),
+    ).fetchall()
+    events = []
+    for source in sources:
+        for fact in extract_facts(source['content'], relaxed=(source_role == 'system')):
+            if ((fact.subject, fact.predicate) == (subject, predicate)
+                    and (fact.kind == 'fact' or fact.subject == 'favorite')):
+                events.append((source, fact))
+    if not events or not any(source['timestamp_origin'] == 'message.timestamp' for source, _ in events):
+        return 0
+    stored = conn.execute(
+        "SELECT * FROM facts WHERE user_id=? AND subject=? AND predicate=? AND source_role=?"
+        " ORDER BY seq,fid", (user_id, subject, predicate, source_role),
+    ).fetchall()
+    available = {}
+    for row in stored:
+        available.setdefault((row['source_rid'], row['value'], row['kind']), []).append(row['fid'])
+    # No retained utterance can prove an unmatched legacy assertion. Preserve
+    # existing source-order behavior rather than retire it by inferred time.
+    remaining = {key:list(values) for key, values in available.items()}
+    planned = []
+    for source, fact in events:
+        matches = remaining.get((source['rid'], fact.value, fact.kind), [])
+        fid = matches.pop(0) if fact.operation != 'retract' and matches else None
+        planned.append((source, fact, fid))
+    if any(remaining.values()):
+        return 0
+    inserted = 0
+    resolved = []
+    for source, fact, fid in planned:
+        if fact.operation != 'retract' and fid is None:
+            fid = conn.execute(
+                "INSERT INTO facts(user_id,session_id,source_rid,subject,predicate,value,kind,"
+                "confidence,status,previous_value,created_at,seq,source_role)"
+                " VALUES(?,?,?,?,?,?,?,?,'stale',NULL,?,?,?)",
+                (user_id,source['session_id'],source['rid'],subject,predicate,fact.value,
+                 fact.kind,fact.confidence,source['created_at'],source['seq'],source_role),
+            ).lastrowid
+            inserted += 1
+        resolved.append((source, fact, fid))
+    def explicit_timestamp(source):
+        try:
+            return source['timestamp_origin'] == 'message.timestamp' and math.isfinite(float(source['created_at']))
+        except (TypeError, ValueError, OverflowError):
+            return False
+    if all(explicit_timestamp(source) for source, _, _ in resolved):
+        resolved.sort(key=lambda event: (float(event[0]['created_at']), event[0]['seq'],
+                                         event[0]['rid'], event[1].source_pos))
+    current = None
+    current_value = None
+    previous = None
+    updates = {}
+    for source, fact, fid in resolved:
+        if fact.operation == 'retract':
+            if current_value is not None and _clean(current_value).casefold() == fact.value.casefold():
+                current, current_value, previous = None, None, None
+            continue
+        if fact.value != current_value:
+            previous = current_value
+        current, current_value = fid, fact.value
+        updates[fid] = previous
+    conn.executemany("UPDATE facts SET status=?,previous_value=? WHERE fid=?",
+                     [('active' if fid == current else 'stale', value, fid)
+                      for fid, value in updates.items()])
+    return inserted
 
 
 def _resolve_legacy_roles(conn: sqlite3.Connection, user_id: str, subject: str, predicate: str,
@@ -771,6 +876,49 @@ def _with_source(conn: sqlite3.Connection, row: sqlite3.Row | dict, has_items: b
             result["created_at"] = source["created_at"]
             result["timestamp_origin"] = source["timestamp_origin"] or "legacy-unknown"
     return result
+
+
+def _applicability_evidence(conn, user_id: str, assertion: dict, cache: dict) -> list[dict]:
+    """Quote later qualifications without treating extracted state as truth."""
+    if (assertion.get('subject') != 'self' or assertion.get('predicate') not in
+            {'name', 'nickname', 'location', 'work', 'role', 'condition'}
+            or assertion.get('source_rid') is None or not _has_items(conn)):
+        return []
+    role = assertion.get('role', assertion.get('source_role', 'unknown'))
+    if role not in {'user', 'assistant', 'system', 'tool'}:
+        return []
+    key = ('qualification', assertion.get('fid'), assertion['source_rid'])
+    if key in cache:
+        return cache[key]
+    sources_key = ('sources', role)
+    if sources_key not in cache:
+        cache[sources_key] = [dict(row) for row in conn.execute(
+            'SELECT rid,rid AS source_rid,user_id,session_id,role,content,created_at,seq,' + _timestamp_column(conn)
+            + " FROM items WHERE user_id=? AND role=? AND status='active' ORDER BY seq,rid",
+            (user_id, role))]
+    def is_later(source):
+        if source['rid'] == assertion['source_rid']:
+            return False
+        if source['timestamp_origin'] == assertion.get('timestamp_origin') == 'message.timestamp':
+            try:
+                left, right = float(source['created_at']), float(assertion['created_at'])
+                if math.isfinite(left) and math.isfinite(right):
+                    return (left, source['seq'], source['rid']) > (right, assertion['seq'], assertion['source_rid'])
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return source['seq'] > assertion.get('seq', float('inf'))
+    later = (source for source in cache[sources_key] if is_later(source))
+    cache[key] = state_layer.qualifications(assertion, later)
+    return cache[key]
+
+
+def _applicability_note(evidence: list[dict]) -> str:
+    if not evidence:
+        return ''
+    return ('\n[CURRENT UNVERIFIED: the value above is an extracted assertion; '
+            'later original evidence qualifies its applicability. Read both sources; '
+            'no replacement value is inferred.]\n'
+            + '\n'.join(_source_label(source) + '\n' + source['text'] for source in evidence))
 
 
 _CARE_QUERY = re.compile(r"\b(?:health|illness|allerg\w*|medication|condition|care|diagnos\w*|anxiety|depression)\b|健康|病情|过敏|服药|心理|焦虑|抑郁|关怀", re.I)
@@ -1010,13 +1158,17 @@ def change_history(
         selected.extend((score, row) for row in chosen)
     selected.sort(key=lambda pair: (pair[1]["seq"], pair[1]["fid"]))
     has_items = _has_items(conn)
-    out = []
+    out, applicability_cache = [], {}
     for score, row in selected:
         result = _with_source(conn, row, has_items)
         label = "CURRENT" if row["status"] == "active" else "HISTORICAL"
+        qualifications = (_applicability_evidence(conn, user_id, result, applicability_cache)
+                          if row['status'] == 'active' else [])
+        if qualifications:
+            label = 'RECORDED ASSERTION; CURRENT UNVERIFIED'
         result["text"] = (
             f"[{label}] {row['subject']}.{row['predicate']}: {row['value']} "
-            + _source_label(result)
+            + _source_label(result) + _applicability_note(qualifications)
         )
         result["kind"] = "change"
         result["score"] = round(score, 6)
@@ -1070,18 +1222,32 @@ def match_facts(
             score -= 0.2           # visible, but behind the current value
         scored.append((score, r))
     scored.sort(key=lambda x: x[0], reverse=True)
-    out = []
+    out, applicability_cache = [], {}
     for score, r in scored[:limit]:
         text = f"{r['subject']} / {r['predicate']}: {r['value']}"
+        qualifications = []
         if r["status"] == "stale":
             current = r["current_value"]
             text = "[HISTORICAL] " + text
-            text += (f" (current value: {current})" if current is not None
+            if current is not None:
+                active = conn.execute(
+                    "SELECT * FROM facts WHERE user_id=? AND subject=? AND predicate=?"
+                    " AND source_role=? AND status='active' ORDER BY seq DESC,fid DESC LIMIT 1",
+                    (user_id, r['subject'], r['predicate'], r['source_role'])).fetchone()
+                if active:
+                    qualifications = _applicability_evidence(
+                        conn, user_id, _with_source(conn, active, has_items), applicability_cache)
+            text += ((f" (latest extracted value: {current}; current applicability unverified)" if qualifications
+                      else f" (current value: {current})") if current is not None
                      else " (no active value recorded)")
         elif r["previous_value"]:
             text += f"  (changed from: {r['previous_value']})"
+        if r['status'] == 'active':
+            qualifications = _applicability_evidence(conn, user_id, r, applicability_cache)
+            if qualifications:
+                text = '[RECORDED ASSERTION; CURRENT UNVERIFIED] ' + text
         result = dict(r)
-        result.update(score=round(score, 6), text=text + " " + _source_label(r))
+        result.update(score=round(score, 6), text=text + " " + _source_label(r) + _applicability_note(qualifications))
         out.append(result)
     return out
 
@@ -1142,7 +1308,7 @@ def build_profile(conn: sqlite3.Connection, user_id: str, query: str = "", max_i
     ))
     rows = rows[:max_items]
 
-    rules, prefs, facts = [], [], []
+    rules, prefs, facts, applicability_cache = [], [], [], {}
     for r in rows:
         if r["kind"] == "rule":
             rules.append(_display_rule(r["predicate"], r["value"]) + " " + _source_label(r))
@@ -1155,7 +1321,10 @@ def build_profile(conn: sqlite3.Connection, user_id: str, query: str = "", max_i
             prefs.append(f"{verb} {val} " + _source_label(r))
         else:
             owner = "assistant-stated " if r["role"] == "assistant" else ""
-            facts.append(f"{owner}{r['subject']}.{r['predicate']}={r['value']} " + _source_label(r))
+            qualifications = _applicability_evidence(conn, user_id, r, applicability_cache)
+            qualifier = '[CURRENT UNVERIFIED; latest extracted assertion] ' if qualifications else ''
+            facts.append(qualifier + f"{owner}{r['subject']}.{r['predicate']}={r['value']} "
+                         + _source_label(r) + _applicability_note(qualifications))
     parts = []
     if rules:
         parts.append("rules: " + "; ".join(list(dict.fromkeys(rules))[:5]))
@@ -1521,10 +1690,9 @@ def _procedure_dependency_indexes(units: list[dict], kept: set[int]) -> set[int]
     source or session and it does not infer or execute a missing policy.
     """
     sources = {units[index]['source_rid'] for index in kept}
-    dependencies = {index for index, unit in enumerate(units)
-                    if unit['source_rid'] in sources
-                    and _PROCEDURE_SUBJECT.search(unit['text'])
-                    and _PROCEDURE_CONTROL.search(unit['text'])}
+    dependencies = {index for index in dependency_layer.execution_control_indexes(
+                        [unit['text'] for unit in units])
+                    if units[index]['source_rid'] in sources}
     for index in tuple(dependencies):
         following = index + 1
         while (following < len(units)
@@ -1615,7 +1783,8 @@ def _context_pieces(units: list[dict], *, compact_numeric: bool = False) -> list
     # Validity restrictions qualify the data that follows. Quote their real
     # source first so a consumer's prefix cannot read a sampled numeric block
     # as usable evidence while missing its later withdrawal.
-    units=sorted(units,key=lambda unit:not (unit.get('context_qualification') or unit.get('context_dependency')))
+    units=sorted(units,key=lambda unit:not (unit.get('context_qualification') or unit.get('context_dependency')
+                                           or unit.get('context_schema')))
     if not compact_numeric:
         source,metadata_columns,metadata = _context_metadata(units)
         lines=[source,"Columns: source_rid@seq/segment"
@@ -2128,6 +2297,10 @@ def context_units_for_query(rows, query: str) -> list[dict]:
                         for index in tabular:
                             if len(_NUMERIC_LITERAL.findall(units[index]['text'])) < 2:
                                 units[index]['context_schema']=True
+            extra, schema = data_layer.expand(units, kept)
+            kept.update(extra)
+            for index in schema:
+                units[index]['context_schema'] = True
             kept=_schema_block_closure(units,kept)
             kept.update(_procedure_dependency_indexes(units,kept))
             units = [unit for index,unit in enumerate(units) if index in kept]

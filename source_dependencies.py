@@ -18,6 +18,34 @@ MAX_DEPENDENCIES = 24
 MAX_DISTANCE = 512
 MAX_CHAIN = 4
 
+_EXECUTION_SUBJECT = re.compile(
+    r"\b(?:rules?|steps?|instructions?|operations?|algorithm|execution|procedure|protocol)\b"
+    r"|规则|步骤|指令|操作|算法|执行|流程", re.I)
+_EXECUTION_CONTROL = re.compile(
+    r"\b(?:order|sequence|once|times?|passes?|iterations?|repeat\w*|revisit\w*|"
+    r"skip\w*|stop\w*|return|before|after)\b|顺序|次序|一次|遍历|重复|跳过|终止|回到", re.I)
+_ENACTED_CONTROL = re.compile(
+    r"(?:^|[:;,])\s*(?:please\s+)?(?:process|execute|evaluate|perform|apply|follow|run|repeat|revisit|skip|stop|return)\b"
+    r"|\b(?:must|shall|should|never|always|do\s+not|don't)\s+(?:\w+\s+){0,2}"
+    r"(?:process|execute|evaluate|perform|apply|follow|run|repeat|revisit|skip|stop|return)\b"
+    r"|\b(?:is|are|be|been|being)\s+(?:(?:never|not|always|only|each)\s+){0,2}"
+    r"(?:processed|executed|evaluated|performed|applied|followed|run|repeated|revisited|skipped|stopped)\b"
+    r"|\b(?:rules?|steps?|instructions?|operations?)\s+(?:(?:each|all|always|only)\s+){0,2}"
+    r"(?:run|execute|apply|repeat)\b"
+    r"|(?:按照|按顺序|依次|顺序执行|执行顺序|只执行一次|仅执行一次|永久跳过|不再返回|不得重访|禁止重复)", re.I)
+
+
+def execution_control_indexes(sentences: list[str]) -> set[int]:
+    """Select stated execution policies, rather than mere topic mentions.
+
+    A notebook can mention 'skip rules' without instructing anyone to skip a
+    rule. Operational wording and an execution subject/control must all be
+    present. This quotes controls only; it neither executes nor validates them.
+    """
+    return {index for index, text in enumerate(sentences)
+            if _EXECUTION_SUBJECT.search(text) and _EXECUTION_CONTROL.search(text)
+            and _ENACTED_CONTROL.search(text)}
+
 _WORDS = re.compile(r"[A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]{2,}")
 _GOVERNANCE = re.compile(
     r"\b(?:approv\w*|authori[sz]\w*|ratif\w*|consent\w*|grant\w*|den(?:y|ied|ial)|declin\w*|"
