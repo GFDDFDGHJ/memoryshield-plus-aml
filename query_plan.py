@@ -128,6 +128,33 @@ _FACETS = {
 _TOPIC_BOUND = re.compile(r'\b(?:about|regarding|concerning|for)\s+(?!me\b|us\b|myself\b|ourselves\b|all\b|every\b)\S|关于|针对|围绕|有关', re.I)
 _TYPED_OBJECT = re.compile(r'\b(?:project|turbine|experiment|contract|permit|device|protocol|puzzle|algorithm)\b|项目|计划|涡轮|实验|合同|许可|设备|协议|谜题|算法', re.I)
 
+# Recognize the *complete object* of a direct summary request. A bare personal
+# history/memory object supplies its own scope; it does not need an extra word
+# such as "themes". Full matching is intentional: "my memories of the kiln"
+# and "my history with a supplier" have a narrower, unclassified complement.
+# They must not become global merely because "memories" or "history" occurs.
+_DIRECT_SUMMARY = (
+    r'(?:(?:can|could|would)\s+you\s+(?:please\s+)?|please\s+)?'
+    r'(?:summari[sz]e|recap|synthesi[sz]e|consolidate|'
+    r'(?:give|provide|offer)(?:\s+(?:me|us))?\s+(?:a|an|the)\s+'
+    r'(?:summary|overview|recap)\s+of)\s+'
+)
+_COMPLETE_MEMORY_OBJECT = (
+    r'(?:(?:all\s+(?:of\s+)?)?(?:my|our)\s+'
+    r'(?:(?:past|previous|earlier|shared|personal|whole|entire|complete|full)\s+)*'
+    r'(?:history|past|memories|experiences|conversations|discussions|exchanges)'
+    r'|me|myself|us|ourselves|who\s+(?:I\s+am|we\s+are)'
+    r'|(?:what|everything)\s+you\s+(?:remember|know|(?:have\s+)?learned)\s+'
+    r'about\s+(?:me|myself|us|ourselves))'
+)
+_SUMMARY_TAIL = r'(?:\s+(?:so\s+far|to\s+date|as\s+a\s+whole|over\s+time|briefly|in\s+brief))*'
+_COMPLETE_MEMORY_SUMMARY = re.compile(
+    r'^\s*'+_DIRECT_SUMMARY+_COMPLETE_MEMORY_OBJECT+_SUMMARY_TAIL+r'\s*[.!?。！？]*\s*$'
+    r'|^\s*(?:请)?(?:总结|回顾|概述|汇总)(?:一下)?\s*'
+    r'(?:(?:我的|我们的)(?:全部|所有|完整)?(?:经历|历史|记忆|过往|过去|聊天|对话)'
+    r'|(?:我|我们)是怎样的人|我自己|我们自己)\s*[。！？.!?]*\s*$', re.I,
+)
+
 
 def plan(query: str) -> dict:
     """Return an explainable operation plan; preserve concrete topic bounds.
@@ -135,7 +162,8 @@ def plan(query: str) -> dict:
     ``task`` is global_synthesis, topic_synthesis or ordinary. The positive
     query may be empty for a request consisting solely of privacy exclusions.
     Global synthesis requires an integration operation plus either a whole
-    conversation range, or a personal/memory object with holistic meaning.
+    conversation range, a complete memory-summary object, or a personal/
+    memory object with holistic meaning.
     Explicit topics, typed objects and proper names block that promotion.
     ``requested_facets`` keeps a finite personal-attribute ontology visible;
     it is not permission to disclose unrequested fields.
@@ -143,8 +171,10 @@ def plan(query: str) -> dict:
     query = str(query or '')
     positive, excluded, spans = _separate_exclusions(query)
     operation_text = _QUOTED.sub(' ', positive)
+    complete_memory_summary = bool(_COMPLETE_MEMORY_SUMMARY.fullmatch(operation_text))
     integrating = bool(_INTEGRATION.search(operation_text) or _THEMATIC_INQUIRY.search(operation_text)
-                       or _INTEGRATED_VIEW.search(operation_text) or _NOMINAL_INTEGRATION_QUESTION.search(operation_text))
+                       or _INTEGRATED_VIEW.search(operation_text) or _NOMINAL_INTEGRATION_QUESTION.search(operation_text)
+                       or complete_memory_summary)
     facets = [name for name, pattern in _FACETS.items() if re.search(pattern, positive, re.I)]
     without_lead = re.sub(r'^\s*[A-Z][A-Za-z]*\b', ' ', positive)
     named = bool(re.search(r'\b[A-Z][A-Za-z0-9_-]{2,}\b', without_lead))
@@ -155,7 +185,7 @@ def plan(query: str) -> dict:
                        or _QUOTED.search(positive) or re.search(r'\d', positive) or named)
     personal = bool(_MEMORY.search(positive) or _PERSONAL_WHOLE.search(positive)
                     or len(facets) >= 3 and re.search(r'\b(?:my|our)\b|我的|我们的', positive, re.I))
-    whole = bool(_HISTORY_RANGE.search(positive))
+    whole = bool(_HISTORY_RANGE.search(positive) or complete_memory_summary)
     holistic = bool(_HOLISTIC_OBJECT.search(positive))
     # A single named life domain remains a topical request. A genuinely whole
     # history request or integration across several personal attributes has

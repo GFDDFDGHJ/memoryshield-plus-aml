@@ -66,7 +66,7 @@ _POINTER = re.compile(
     r"|\b(?:cited|mentioned|described|specified)\s+above\b|\b(?:in\s+its\s+place|nothing\s+else)\b"
     r"|上述|前述|此前的|先前的|原有的|该(?:批准|授权|许可|规则|条款|豁免|约定)|此(?:批准|授权|豁免)", re.I)
 _ILLUSTRATION = re.compile(r"\b(?:hypothetic\w*|fictional|for\s+example|for\s+instance|imagine|suppose|role[- ]?play|simulation)\b|假设|假想|举例|例如|虚构|角色扮演", re.I)
-_FUTURE_OUTCOME = re.compile(r"\b(?:may|might|could|would|will)\s+(?:be\s+)?(?:approv\w*|grant\w*|authori[sz]\w*|replac\w*|revok\w*)\b|将会批准|可能批准|假如获批", re.I)
+_FUTURE_OUTCOME = re.compile(r"\b(?:may|might|could|would|will)\s+(?:(?:be|have(?:\s+been)?)\s+)?(?:approv\w*|grant\w*|authori[sz]\w*|replac\w*|revok\w*)\b|将会批准|可能批准|假如获批", re.I)
 _PRICING = re.compile(r"\b(?:billing|pricing|tariff|surcharge|charges?|fees?|per[- ]kg|base\s+cost|dispatch\s+amendment)\b|计费|价格|收费|附加费|基本费用|运费|豁免", re.I)
 _WAIVER = re.compile(r"\b(?:waiv\w*|exempt\w*|dispensation|handling\s+surcharge)\b|豁免|免除|附加费", re.I)
 _CHAIN = re.compile(
@@ -114,6 +114,22 @@ def _fields(text):
 def _objects(text):
     text = re.split(r"\b(?:because|due\s+to|after|before|on|since|following)\b", text, maxsplit=1, flags=re.I)[0]
     return _words(text) - _OBJECT_STOP
+
+
+def _simple_actor_outcome(text, actor_text):
+    """An explicit finite past decision, only for the literal condition actor.
+
+    This is evidence selection, including denial; it never executes the
+    condition or promotes its target. Questions, quotations, conditions and
+    modal or negated forms remain outside this additional recognizer.
+    """
+    if (re.search(r'[?？]|\b(?:if|unless|when|once|never|not|may|might|could|would|will)\b', text, re.I)
+            or text.lstrip().startswith(('"', "'", '“', '‘', '「', '『'))):
+        return False
+    actor = re.sub(r'^the\s+', '', actor_text.strip(), flags=re.I)
+    literal = r'\s+'.join(re.escape(word) for word in actor.split())
+    return bool(re.match(r'^\s*(?:the\s+)?' + literal
+                         + r'\s+(?:approved|authori[sz]ed|denied|declined|rejected)\s+', text, re.I))
 
 
 def dependency_indexes(sentences: list[str], anchors: set[int]) -> set[int]:
@@ -166,7 +182,7 @@ def dependency_indexes(sentences: list[str], anchors: set[int]) -> set[int]:
         for match in _CONDITION_ACTOR.finditer(sentences[anchor]):
             actor = _words(match[1]) - {"the", "a", "an", "has", "have", "had"}
             if actor:
-                conditions.append((anchor, actor, _objects(sentences[anchor][match.end():])))
+                conditions.append((anchor, actor, _objects(sentences[anchor][match.end():]), match[1]))
 
     selected = set()
     linked_to = {}
@@ -175,10 +191,17 @@ def dependency_indexes(sentences: list[str], anchors: set[int]) -> set[int]:
             continue
         anchor = nearest(index)
         linked = False
-        if _OUTCOME.search(feature["text"]):
-            for conditional_anchor, actor, target in conditions:
+        if conditions:
+            for conditional_anchor, actor, target, actor_text in conditions:
+                explicit_past = _simple_actor_outcome(feature["text"], actor_text)
+                if not (_OUTCOME.search(feature["text"]) or explicit_past):
+                    continue
+                if explicit_past and not pointer_scope_clear(index, conditional_anchor):
+                    continue
                 cue = _GOVERNANCE.search(feature["text"])
                 objects = _objects(feature["text"][cue.end():]) if cue else set()
+                if explicit_past and objects - target:
+                    continue  # A shared generic 'change' cannot license a different object.
                 named_objects = _names(feature["text"]) - _names(sentences[conditional_anchor]) - actor
                 same_actor = actor <= feature["words"]
                 adjacent_bare_outcome = (index == conditional_anchor+1 and bool(re.match(

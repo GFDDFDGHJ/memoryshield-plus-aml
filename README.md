@@ -1,6 +1,6 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **v3.10.0**. Repository:
+Candidate version: **v3.11.0**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
@@ -40,6 +40,10 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
   projects and single-domain summaries retain their topic bounds. A bounded
   prefix prioritizes explicit choices, changes and reasons; continuations carry
   the remaining selected original history.
+- Complete direct requests such as "Summarize my history" or "Summarize what
+  you remember about me" supply explicit whole-history scope. Specific
+  complements, quoted commands, conditions and negated requests do not gain
+  that scope. Explicit private-field exclusions remain separate constraints.
 - Topic synthesis uses the same query plan in selection and budgeting. Global
   context schedules less-repeated literal sentences before repeated background,
   without merging observations. One original instance of each applicable global
@@ -50,6 +54,9 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
 - A response policy qualified by a topic or a request condition remains local,
   including when that qualifier follows the response noun. Output language,
   format and length alone do not create a topic restriction.
+- Rule evidence retains an immediately preceding explicit scope heading and
+  consecutive imperative follow-ups or an explicit same-rule withdrawal.
+  Blank lines, unrelated narration and new headings delimit those blocks.
 - Source-local qualification links preserve explicit approval outcomes,
   withdrawals, replacements and partial exemptions alongside their anchors.
   Links select original sentences and never execute rules or assert a new state.
@@ -73,6 +80,10 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
   origins keep source order. Reassertions keep their own source pointers.
   Later explicit self-attribute qualifications label applicability unverified
   and quote the later source; the service does not infer a replacement value.
+- Unstructured negated complements such as "not Eira" are not asserted as
+  replacement values. A later exact present-tense denial of the same self
+  field/value is quoted as unverified applicability; historical, conditional,
+  quoted-statement, other-role and different-value controls remain separate.
 - Explicit delimited schemas can precede or follow a contiguous observation
   block. Declared missing cells retain their literal spelling. A new session
   inherits a schema only through an explicit same-dataset reference to one

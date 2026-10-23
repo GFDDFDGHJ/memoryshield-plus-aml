@@ -94,7 +94,7 @@ class Config:
     # --- Server ---
     host: str = os.environ.get("AML_HOST", "0.0.0.0")
     port: int = int(os.environ.get("AML_PORT", "8080"))
-    version: str = os.environ.get("AML_VERSION", "v3.10.0")
+    version: str = os.environ.get("AML_VERSION", "v3.11.0")
 
 
 CONFIG = Config()

@@ -5,8 +5,8 @@ value, query storage, or decide what is true. The caller MUST provide original
 sources already restricted to the same user, the same source role, and strictly
 later record order. In particular, ingestion order alone is not event order.
 
-The intentionally narrow recognizer accepts a completed withdrawal of a named
-self attribute, or an adjacent affirmative outcome for the same actor in one
+The intentionally narrow recognizer accepts a completed withdrawal or an exact
+present-tense denial of a named self attribute, or an adjacent affirmative outcome for the same actor in one
 original conditional source. Unclear coreference and unsupported forms produce
 no result. Returned text is verbatim, suitable for a 'current applicability
 unverified; see later source' note rather than a replacement assertion.
@@ -48,7 +48,8 @@ _CONDITION = re.compile(
     r'(?:then\s+)?(?P<target>.+?)\s*[.!]?\s*$', re.I)
 _QUALIFICATION_CUE = re.compile(
     r'\b(?:revoked|rescinded|withdrawn|voided|invalidated|cancelled|canceled|approved|approval|authorized|authorised)\b'
-    r'|撤销|撤回|注销|作废|取消|废止', re.I)
+    r'|\b(?:is\s+(?:not|no\s+longer)|isn[\'’]t)\b'
+    r'|撤销|撤回|注销|作废|取消|废止|不是|不再是', re.I)
 
 
 def source_sentences(text: str) -> list[str]:
@@ -85,6 +86,26 @@ def _withdrawal(text: str, fields: tuple[str, str], value: str) -> bool:
     chinese = (r'^\s*' + fields[1] + r'(?:[：:=]?\s*' + quoted_value + r')?\s*'
                r'(?:已经|现已|已|现在)?(?:被)?(?:撤销|撤回|注销|作废|取消|废止)')
     return bool(re.search(english, text, re.I) or re.search(chinese, text))
+
+
+def _current_denial(text: str, fields: tuple[str, str], value: str) -> bool:
+    """Match only an exact field/value present denial, without deriving a value.
+
+    Full-sentence matching deliberately leaves historical, modal, conditional,
+    qualified or value-prefix forms unresolved. A quoted value is distinct from
+    quoting the statement itself. Unsupported phrasing remains original text.
+    """
+    if _NONFACTUAL.search(text) or _quoted_start(text) or _question(text):
+        return False
+    literal = re.escape(value.strip())
+    quoted_value = r'(?:' + literal + r'|"' + literal + r'"|\'' + literal + r'\'|“' + literal + r'”|‘' + literal + r'’|「' + literal + r'」)'
+    end = r'\s*[.。!！]?\s*'
+    english = (r'\s*(?:correction\s*:\s*)?' + fields[0]
+               + r'\s+(?:is\s+(?:not|no\s+longer)|isn[\'’]t)\s+'
+               + quoted_value + end)
+    chinese = (r'\s*(?:更正\s*[：:]\s*)?' + fields[1]
+               + r'\s*(?:不是|不再是)\s*' + quoted_value + end)
+    return bool(re.fullmatch(english, text, re.I) or re.fullmatch(chinese, text))
 
 
 def _conditional_pair(first: str, second: str, field: str, value: str) -> bool:
@@ -130,6 +151,8 @@ def qualification_indexes(subject: str, predicate: str, value: str,
             continue
         if _withdrawal(text, fields, value):
             result.append(dict(reason='explicit-self-withdrawal', sentence_indexes=[index]))
+        if _current_denial(text, fields, value):
+            result.append(dict(reason='explicit-current-self-denial', sentence_indexes=[index]))
         if index+1 < len(sentences) and isinstance(sentences[index+1], str):
             if _conditional_pair(text, sentences[index+1], fields[0], value):
                 result.append(dict(reason='later-same-source-condition-outcome',

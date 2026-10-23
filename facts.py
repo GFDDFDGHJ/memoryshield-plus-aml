@@ -59,6 +59,16 @@ def _ok(value: str) -> bool:
     return value.lower() not in STOP_VALUES
 
 
+def _affirmative_complement(value: str) -> bool:
+    """An unstructured predicate's negated object is not a replacement value.
+
+    Keep the source for retrieval; do not assert e.g. a name of 'not Eira'.
+    Explicitly quoted literals and structured triples retain their semantics.
+    This does not retract any old value or infer a new one.
+    """
+    return not bool(re.match(r'\s*(?:not\b|no\s+longer\b|neither\b)', value, re.I))
+
+
 @dataclass(frozen=True)
 class Fact:
     subject: str
@@ -345,11 +355,13 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
         attr, subj_key, value = m.group(1), m.group(2), m.group(3)
         # group(1) is the prefix noun ("dog" in "my dog's name is Max")
         subject = "self" if _slug(attr) in {"", "my"} else _slug(attr)
-        add(subject, _slug(subj_key), value, "fact", 0.9, m.start())
+        if _affirmative_complement(value):
+            add(subject, _slug(subj_key), value, "fact", 0.9, m.start())
 
     for rx, (subject, predicate, kind, conf) in _SELF:
         for m in rx.finditer(text):
-            add(subject, predicate, m.group(1), kind, conf, m.start())
+            if _affirmative_complement(m.group(1)):
+                add(subject, predicate, m.group(1), kind, conf, m.start())
 
     for m in _PREF.finditer(text):
         add("pref", "like", _slug(m.group(2)), "preference", 0.7, m.start())
@@ -388,7 +400,7 @@ def extract_facts(text: str, relaxed: bool = False) -> list[Fact]:
     # explicit state changes win over whatever was stored before
     for rx, (subject, predicate) in _CHANGE_EN:
         for m in rx.finditer(text):
-            if m.groups() and m.group(1):
+            if m.groups() and m.group(1) and _affirmative_complement(m.group(1)):
                 add(subject, predicate, m.group(1), "fact", 0.95, m.start())
     for rx, (subject, predicate) in _RETRACT_EN:
         for m in rx.finditer(text):
@@ -945,6 +957,32 @@ def _speaker_relevant(row: dict, query: str, *, background: bool = False) -> boo
     })
 
 
+_RULE_SCOPE_HEADING = re.compile(
+    r"\s*(?:(?:for|in|within|during|when|whenever|if)\b|针对|在|当|如果|仅对)"
+    r"[^.!?\n]{1,220}[:：]\s*", re.I)
+_RULE_GENERAL_HEADING = re.compile(
+    r"\s*(?:for\s+(?:example|reference|clarity|brevity|consistency|readability|convenience|me|us|you)|"
+    r"in\s+(?:fact|summary|conclusion|short|general)|whenever\s+possible)\s*[:：]\s*", re.I)
+_RULE_BLOCK_MEMBER = re.compile(
+    r"\s*(?:[-*\u2022]|\d+[.)])?\s*(?:(?:please\s+)?(?:always|never|from\s+now\s+on|"
+    r"if|when|whenever|do\s+not|don't|remember\s+to|make\s+sure\s+to|you\s+must)\b"
+    r"|如果|请|务必|记得|不要|别|必须)", re.I)
+_RULE_FOLLOWUP = re.compile(
+    r"\s*(?:(?:then|next|finally|after\s+that)\b|然后|接着|最后)\s*[,，:：]?\s*(.+)", re.I)
+_RULE_CONTINUATION_ACTION = re.compile(
+    r"(?:(?:please\s+)?(?:do\s+not|never|always)\s+(?:" + '|'.join(sorted(_EN_VERBS)) + r")\b"
+    r"|(?:" + '|'.join(sorted(_EN_VERBS)) + r")\s+(?:the|a|an|my|your|our|each|every|all|this|that|these|those|its|their|it|them)\b"
+    r"|(?:add|subtract)\s+[-+]?\d+(?:\.\d+)?\b"
+    r"|(?:multiply|divide)\s+[^.!?\n]{1,100}?\s+by\s+\S"
+    r"|round\s+[^.!?\n]{1,100}?\s+(?:down|up|to)\b"
+    r"|(?:apply|repeat|sort|evaluate)\s+(?:(?:the|a|an|each|every|this|that|these|those)\s+)?"
+    r"(?:operations?|rules?|steps?|formulae?|formulas?|procedures?|results?|values?|labels?)\b)", re.I)
+_RULE_WITHDRAWAL = re.compile(
+    r"\s*(?:this\s+(?:rule|requirement|instruction)|these\s+(?:rules|requirements|instructions))\s+"
+    r"(?:(?:has|have)\s+been\s+|(?:is|are)\s+)?(?:withdrawn|revoked|suspended|rescinded|no\s+longer\s+(?:active|valid|applicable))\b"
+    r"|\s*(?:此|这条|该)(?:规则|要求|指令)(?:已|已经)?(?:撤销|撤回|废止|失效|暂停)", re.I)
+
+
 def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items: bool) -> str:
     """Recover the full source sentence when an older derived value was cut.
 
@@ -962,17 +1000,42 @@ def _complete_source_rule(conn: sqlite3.Connection, row: sqlite3.Row, has_items:
     if not source:
         return value
     needle = _clean(row["value"]).casefold()
-    sentences = _source_sentences(source["content"])
+    # Keep the original paragraph barriers while normalizing only whitespace
+    # in the emitted quotes. A scope heading binds its contiguous rule list,
+    # but must not leak across a blank line or unrelated prose.
+    source_matches = [match for match in _SOURCE_SENTENCES.finditer(source["content"])
+                      if match.group(0).strip()]
+    sentences = [re.sub(r"[^\S\t]+", " ", match.group(0)).strip()
+                 for match in source_matches]
     matches = [index for index, sentence in enumerate(sentences)
                if needle in sentence.casefold()]
     if len(matches) != 1:
         return value
     index = matches[0]
     linked = [sentences[index]]
+    for previous in range(index - 1, -1, -1):
+        gap = source["content"][source_matches[previous].start():source_matches[previous + 1].start()]
+        if re.search(r"\n[\t \r]*\n", gap):
+            break
+        candidate = sentences[previous]
+        if _RULE_SCOPE_HEADING.fullmatch(candidate):
+            linked.insert(0, candidate)
+            break
+        if not _RULE_BLOCK_MEMBER.match(candidate):
+            break
     # Adjacent exceptions qualify the rule, rather than constituting another
     # independent instruction. Stop at unrelated narration or a new rule.
-    for sentence in sentences[index + 1:]:
-        if not re.match(r"\s*(?:exception\b|except\b|unless\b|however\b|but\b|otherwise\b|注意|例外|但是|但若|除非|否则|不过)", sentence, re.I):
+    for following, sentence in enumerate(sentences[index + 1:], index + 1):
+        exception = re.match(r"\s*(?:exception\b|except\b|unless\b|however\b|but\b|otherwise\b|注意|例外|但是|但若|除非|否则|不过)", sentence, re.I)
+        action = _RULE_FOLLOWUP.fullmatch(sentence)
+        action_text = action.group(1) if action else ''
+        # A verb-shaped first word alone is insufficient: Return Logistics,
+        # round tables and repeat customers are ordinary noun phrases. Keep
+        # only explicit instruction objects or unambiguous operation syntax.
+        sequential = action and (_ZH_INSTR.match(action_text) or _RULE_CONTINUATION_ACTION.match(action_text))
+        withdrawn = _RULE_WITHDRAWAL.match(sentence)
+        gap = source["content"][source_matches[following - 1].start():source_matches[following].start()]
+        if not exception and (re.search(r"\n[\t \r]*\n", gap) or not (sequential or withdrawn)):
             break
         linked.append(sentence)
     return " ".join(linked)
@@ -1006,6 +1069,12 @@ _REQUEST_SCOPED_CONDITION = re.compile(
 def _global_response_rule(value: str, confidence: float = 1.0) -> bool:
     """One scope decision for dedicated rules and global context protection."""
     semantics = re.sub(r'^\s*(?:[-*\u2022]|\d+[.)])\s+', '', value)
+    # A general manner/feasibility heading does not name a topical domain.
+    # Retain it in the quoted evidence (including "Whenever possible") and
+    # remove it only from this scope-classification view.
+    heading = _RULE_GENERAL_HEADING.match(semantics)
+    if heading:
+        semantics = semantics[heading.end():].lstrip()
     # Literal output examples do not define the rule's applicability domain.
     # The complete original wording is still quoted by relevant_rules.
     semantics = _RULE_QUOTED_CONTENT.sub(' ', semantics)
@@ -1014,7 +1083,7 @@ def _global_response_rule(value: str, confidence: float = 1.0) -> bool:
     explicit_response = bool(_RESPONSE_SCOPE.search(semantics))
     conditional_rule = bool(re.match(r"\s*(?:if|when|whenever)\b|\s*(?:如果|当|若)", semantics, re.I))
     local_prefix = bool(re.match(r"\s*(?:for|in|during|within|while)\b|\s*(?:针对|在)", semantics, re.I))
-    outer_response_scope = bool(re.match(r"\s*for\s+(?:all|every|each)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", semantics, re.I))
+    outer_response_scope = bool(re.match(r"\s*(?:for|in)\s+(?:all|every|each)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", semantics, re.I))
     domain_text = re.sub(r"\b(?:for|in)\s+(?:all|every|each|your|future|subsequent)\s+(?:future\s+|subsequent\s+)?(?:responses?|replies|answers?|outputs?)\b", " ", semantics, flags=re.I)
     embedded_condition = bool(re.search(r"[,;]\s*(?:if|when|whenever)\b|(?:针对|用于)", domain_text, re.I))
     response_domain = bool(_RESPONSE_DOMAIN.search(domain_text)

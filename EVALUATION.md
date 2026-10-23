@@ -16,6 +16,60 @@ vectors against both implementations. Reports retain source, fixture,
 evaluator, and vector hashes. Generate additional deterministic seed variants
 only after candidate changes are frozen, and retain their results separately.
 
+## v3.11.0: complete summary scope and qualified rule/state evidence
+
+This medium update preserves the existing models, storage schema and public
+Add/Search routes. Development uses invented fixtures and temporary databases;
+official raw tasks are not inspected. The changes preserve source evidence
+rather than generating answers or executing remembered instructions.
+
+- A direct summary request with a complete personal-history or self object
+  now supplies whole-history scope. Matching the entire request prevents a
+  narrower complement such as "my memories of the kiln" from opening the
+  whole history. Existing topic, quotation, numeric and private-field guards
+  remain. In a separate fixed 16-paraphrase fixture, complete source coverage
+  improves from 10/16 to 16/16; six changed requests improve from 65/67 of 128
+  sources to all 128. Thirty-six negative controls retain their previous
+  classification, and the older 16-case intent evaluator is unchanged.
+- Rule evidence includes its immediately preceding explicit scope heading,
+  including a consecutive rule list under that heading. It also retains
+  consecutive Then/Next/Finally imperative actions and an explicit same-rule
+  withdrawal sentence. Blank lines, narration and new scope headings stop
+  expansion. General manner/feasibility headings retain their original words
+  while scope classification keeps global response policies global. Ordinary
+  Then/Next narration is not attached solely because its first word resembles
+  a verb. The same fixed 14 invented rule contracts improve from 5/14 to
+  14/14, including two complete Search checks with low-similarity rules and
+  110 distracting sources. This is not arbitrary domain or rule inference.
+- Unstructured English predicates no longer assert a negated complement such
+  as a name of "not Eira" as a new positive value. Quoted literal values and
+  explicit structured triples retain their original interpretation. An exact
+  present-tense denial of the same self field/value can qualify an earlier
+  assertion with CURRENT UNVERIFIED and the later original source. No new
+  value is inferred and no stored assertion is retired by this selector.
+  Twelve positive qualification fixtures improve from 0/12 to 12/12;
+  thirty historical, modal, conditional, quoted, role/field and value-prefix
+  controls have no added false selections. Full Search checks also verify
+  source identity, role/user isolation and provided timestamp order.
+- A literal condition actor's completed simple-past approval or denial can
+  accompany that same object's source evidence. The new branch requires the
+  outcome object tokens to be contained in the condition's object and obeys
+  scope/private-field barriers. Five positive source-local contracts improve
+  from 0/5 to 5/5, with no false additions in sixteen negative controls. Modal
+  perfect forms such as "might have approved" remain uncompleted evidence.
+  The service does not execute the condition or assert its target value.
+
+All 34 isolated offline scripts pass. Both existing 47-case real-v4 cached
+seeds retain every prior evidence, source, role and rank contract with no new
+regression. Extended-context, state, data and long-source contracts retain
+8/8, 12/12, 9/9 and 6/6 complete evidence respectively. An independent 12-case
+rule review passes, including the global-style and narration counterexamples.
+One synchronized 16-search cached-vector round has no errors, isolation or
+literal failures; this does not measure public HTTP or provider throughput.
+
+These counts measure selected, attributed original evidence and scoped query
+behavior. They do not predict an official Smoke or Full answer score.
+
 ## v3.10.0: bounded synthesis and rule scope
 
 This medium update retains the same models, routes, credentials, storage schema
