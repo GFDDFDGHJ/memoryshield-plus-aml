@@ -11,6 +11,11 @@ from bisect import bisect_right
 import re
 from typing import Iterable
 
+try:
+    from .code_structure import structure_index
+except ImportError:  # Standalone app/test commands run with coding/ as cwd.
+    from code_structure import structure_index
+
 _IDENTIFIER = re.compile(r"[^\W\d]\w*|\$[A-Za-z_]\w*", re.UNICODE)
 _QUALIFIED = re.compile(r"\b[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+\b")
 _PATH = re.compile(r"(?<![\w.@+-])(?:[A-Za-z]:[\\/]|\.{0,2}[\\/])?(?:[\w.@+-]+[\\/])+[\w.@+-]+")
@@ -50,6 +55,25 @@ def code_tokens(text: str) -> set[str]:
 
 def _indent(line: str) -> int:
     return len(line[:len(line)-len(line.lstrip(' \t'))].expandtabs())
+
+
+def _literal_offset(line: str, terms: set[str]) -> int:
+    """Map matching aliases back to original characters, including ß→ss.
+
+    This view is used solely for choosing a partial line. Returned evidence
+    remains an exact source slice, including case and original path slashes.
+    """
+    positions=[line.find(term) for term in terms if term in line]
+    if positions:return min(positions)
+    folded=[];original=[]
+    for index,char in enumerate(line):
+        alias=char.replace('\\','/').casefold()
+        folded.append(alias);original.extend([index]*len(alias))
+    alias=''.join(folded)
+    for term in terms:
+        found=alias.find(term.replace('\\','/').casefold())
+        if found>=0:positions.append(original[found])
+    return min(positions) if positions else 0
 
 
 def _merge(ranges):
@@ -103,9 +127,10 @@ def code_windows(text: str, query: str, max_chars: int = 6000, *,
                  excluded_ranges: Iterable[tuple[int, int]] = ()) -> list[dict]:
     """Select bounded, nonoverlapping exact source slices in original order.
 
-    Matching uses literal identifier/path/error tokens. Nearby lexical scope
-    headers and actual Markdown fence edges are optional evidence, subject to
-    the same exclusion, window and character budgets. No missing brace, fence,
+    Matching uses literal identifier/path/error tokens. Statically bounded
+    complete functions, referenced imports, direct-call functions, lexical
+    headers and actual fence edges compete for the same strict source budget.
+    No missing brace, fence,
     declaration, value or dependency is invented. Unknown-language/no-match
     input falls back to an explicitly labelled literal opening, not a summary.
     """
@@ -163,23 +188,41 @@ def code_windows(text: str, query: str, max_chars: int = 6000, *,
         trial = _merge(chosen+[(start,end,reason)])
         if len(trial)>max_windows or sum(right-left for left,right,_ in trial)>max_chars:return False
         chosen.append((start,end,reason));return True
+    structure=structure_index(lines,allowed) if any(score for score,_,_ in matches) else None
+    expanded=set()
+    def admit_lines(start,end,reason):
+        return (0<=start<end<=len(lines) and all(allowed[start:end])
+                and admit(offsets[start],offsets[end],reason))
     for score,index,overlap in matches[:max_windows*8]:
         start,end = offsets[index],offsets[index+1]
         if end-start>max_chars:
-            needles = [lines[index].find(token) for token in overlap if token in lines[index]]
-            at = min(needles) if needles else 0
+            at = _literal_offset(lines[index],overlap)
             left = max(start,start+at-max_chars//3)
             right = min(end,left+max_chars);left=max(start,right-max_chars)
             admit(left,right,'literal-match-partial-line' if score else 'fallback-partial-line')
             continue
+        block=structure.enclosing(index) if structure else None
+        complete=False
+        if block is not None:
+            complete=admit_lines(block.start,block.end,'complete-static-function')
+            identity=(block.start,block.end)
+            if identity not in expanded:
+                expanded.add(identity)
+                if complete:
+                    for left,right,reason in structure.dependencies(block):
+                        # Withheld source is never a bridge to a dependency.
+                        if all(allowed[min(left,index):max(right,index+1)]):
+                            admit_lines(left,right,reason)
         if not admit(start,end,'literal-token-match' if score else 'fallback-no-literal-match'):continue
+        if block is not None and not complete and block.signature:
+            admit_lines(*block.signature,'structured-signature-partial-body')
         for header in _headers(lines,index):
             if allowed[header] and all(allowed[min(header,index):max(header,index)+1]):
                 admit(offsets[header],offsets[header+1],'lexical-scope-header')
         if index in fence_for:
             for edge in fence_for[index]:
                 if allowed[edge]:admit(offsets[edge],offsets[edge+1],'original-fence-edge')
-        for distance in range(1,context_lines+1):
+        for distance in range(1,(0 if complete else context_lines)+1):
             for neighbour in (index-distance,index+distance):
                 if (0<=neighbour<len(lines) and all(allowed[min(neighbour,index):max(neighbour,index)+1])):
                     admit(offsets[neighbour],offsets[neighbour+1],'adjacent-literal-line')

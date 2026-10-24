@@ -194,5 +194,40 @@ class CodingStoreTests(unittest.TestCase):
         with closing(sqlite3.connect(other)) as connection:
             self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(),[('important',)])
 
+    def test_related_implementation_evidence_reaches_small_top_k_after_dense_noise(self):
+        self.add('File: src/finch/cache.py\ndef refresh_finch(key):\n    return cache[key]\n')
+        for index in range(80):self.add(f'Ordinary unconnected cabinet notebook {index}.')
+        correction='Correction for src/finch/cache.py: missing keys need an explicit sentinel; the first attempt raised unexpectedly.'
+        self.add(correction)
+        results=self.memory.search('target','Locate refresh_finch.',4)
+        self.assertEqual(results[0]['source_rid'],1)
+        self.assertIn(correction,'\n'.join(item['content'] for item in results))
+        self.assertTrue(any(item.get('linked_seed_rid')==1 for item in results))
+
+    def test_aggregate_context_budget_covers_wrappers_and_literal_source_ranges(self):
+        sources={}
+        for index in range(30):
+            source=f'Archived invented beam payload {index}: '+'x'*18000+'\n'
+            self.add(source,session='large-'+str(index))
+            sources[index+1]=source
+        results=self.memory.search('target','unmatched-garden-question',100)
+        self.assertTrue(results)
+        self.assertLessEqual(sum(len(item['content']) for item in results)+2*(len(results)-1),48000)
+        self.assertTrue(all(len(item['content'])<=9000 for item in results))
+        for item in results:
+            for start,end in item['source_char_ranges']:
+                self.assertIn(sources[item['source_rid']][start:end],item['content'])
+        self.assertEqual([item['score'] for item in results],sorted([item['score'] for item in results],reverse=True))
+
+    def test_long_escaped_provenance_is_included_in_budget_without_truncation(self):
+        source='def FernCodec():\r\n    return "🌲"\r\n'+'x'*12000
+        session='"'*1000
+        self.add(source,session=session)
+        item=self.memory.search('target','FernCodec',1)[0]
+        self.assertEqual(item['session_id'],session)
+        self.assertLessEqual(len(item['content']),9000)
+        for start,end in item['source_char_ranges']:
+            self.assertIn(source[start:end],item['content'])
+
 
 if __name__=='__main__':unittest.main()

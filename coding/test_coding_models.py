@@ -72,7 +72,7 @@ class EmbeddingProviderTests(unittest.TestCase):
                 return list(reversed(range(len(documents))))
         provider.ranker=OfflineRanker()
         original=['def example():\n    return "'+str(index)+'"\n'+'x'*5000 for index in range(64)]
-        order=provider.rerank('why does the example fail?',original)
+        order=provider.rerank('why does the example fail? '+'long-query-context '*300,original)
         self.assertLess(provider.ranker.count,64)
         self.assertEqual(set(order),set(range(64)))
         self.assertEqual(order[provider.ranker.count:],list(range(provider.ranker.count,64)))

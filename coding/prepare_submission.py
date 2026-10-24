@@ -8,11 +8,13 @@ ROOT=Path(__file__).resolve().parent
 FILES=('.gitignore','README.md','requirements.txt','app.py','coding_config.py',
        'coding_models.py','coding_reranker.py','coding_store.py','code_windows.py',
        'watcher.ps1','test_code_windows.py','test_coding_store.py','test_api_contract.py',
-       'test_coding_models.py','test_coding_reranker.py','prepare_submission.py')
+       'test_coding_models.py','test_coding_reranker.py','prepare_submission.py',
+       'evidence_packing.py','test_evidence_packing.py','ranking_copies.py',
+       'test_ranking_copies.py','logging.json','code_structure.py')
 
 def main():
     payloads={name:(ROOT/name).read_bytes() for name in FILES}
-    manifest={'system':'MemoryShield+ Coding','version':'v1.0.1','track':'coding',
+    manifest={'system':'MemoryShield+ Coding','version':'v4.1.0','track':'coding',
               'repository':'https://github.com/GFDDFDGHJ/memoryshield-plus-aml',
               'files':{name:hashlib.sha256(value).hexdigest() for name,value in payloads.items()}}
     raw=(json.dumps(manifest,indent=2)+'\n').encode('utf-8')

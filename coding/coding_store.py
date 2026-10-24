@@ -20,8 +20,10 @@ from typing import Callable
 
 try:
     from .code_windows import code_tokens, code_windows, render_code_windows
+    from .evidence_packing import pack_evidence
 except ImportError:  # uvicorn --app-dir coding imports modules at this level.
     from code_windows import code_tokens, code_windows, render_code_windows
+    from evidence_packing import pack_evidence
 
 
 class AddRequestConflict(ValueError):
@@ -275,19 +277,32 @@ class MemoryStore:
                     ranked = [pool[index] for index in order]+ranked[len(pool):]
             except Exception:
                 pass  # Ranking is optional; literal local evidence remains available.
-        output = []
-        for rank,index in enumerate(ranked[:top_k],1):
-            row = rows[index]
-            windows = code_windows(row['content'],query,max_chars=6000)
-            label = (f"[SOURCE source_rid={row['rid']} session={json.dumps(row['session_id'],ensure_ascii=False)} "
-                     f"seq={row['seq']} role={json.dumps(row['role'],ensure_ascii=False)} "
-                     f"recorded_at={_iso(row['created_at'])} timestamp_origin={row['timestamp_origin']}; "
-                     'recorded time is source provenance, not a code-version precedence claim]')
-            output.append(dict(id=f"code_mem_{row['rid']}",content=label+'\n'+render_code_windows(row['content'],windows),
-                score=round(1/(60+rank),8),cosine_similarity=round(row['cosine'],8),
-                created_at=_iso(row['created_at']),source_rid=row['rid'],session_id=row['session_id'],
-                seq=row['seq'],role=row['role'],timestamp_origin=row['timestamp_origin'],
-                source_char_ranges=[[window['start'],window['end']] for window in windows],
-                source_line_ranges=[[window['start_line'],window['end_line']] for window in windows],
-                source_chars=len(row['content']),excerpt=sum(len(window['text']) for window in windows)<len(row['content'])))
+        output = pack_evidence(rows,[rows[index]['rid'] for index in ranked],query,
+            self._render_evidence,top_k=top_k,char_budget=48000,max_source_chars=9000)
+        for rank,item in enumerate(output,1):
+            item['score']=round(1/(60+rank),8)
         return output
+
+    @staticmethod
+    def _render_evidence(row,query,max_chars):
+        """Fit literal source and all coordinate/provenance labels together."""
+        label = (f"[SOURCE source_rid={row['rid']} session={json.dumps(row['session_id'],ensure_ascii=False)} "
+                 f"seq={row['seq']} role={json.dumps(row['role'],ensure_ascii=False)} "
+                 f"recorded_at={_iso(row['created_at'])} timestamp_origin={row['timestamp_origin']}; "
+                 'recorded time is source provenance, not a code-version precedence claim]')
+        source_budget=min(len(row['content']),max_chars-len(label)-2)
+        for _ in range(5):
+            if source_budget<=0:return None
+            windows=code_windows(row['content'],query,max_chars=source_budget)
+            if not windows:return None
+            content=label+'\n'+render_code_windows(row['content'],windows)
+            if len(content)<=max_chars:
+                return dict(id=f"code_mem_{row['rid']}",content=content,
+                    cosine_similarity=round(row['cosine'],8),
+                    created_at=_iso(row['created_at']),source_rid=row['rid'],session_id=row['session_id'],
+                    seq=row['seq'],role=row['role'],timestamp_origin=row['timestamp_origin'],
+                    source_char_ranges=[[window['start'],window['end']] for window in windows],
+                    source_line_ranges=[[window['start_line'],window['end_line']] for window in windows],
+                    source_chars=len(row['content']),excerpt=sum(len(window['text']) for window in windows)<len(row['content']))
+            source_budget-=len(content)-max_chars+16
+        return None

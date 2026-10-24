@@ -134,6 +134,15 @@ class CodeWindowTests(unittest.TestCase):
         self.assertEqual((windows[0]['start_line'],windows[0]['end_line']),(1,1))
         self.assertIn('partial-line',windows[0]['reason'])
 
+    def test_partial_line_casefold_and_windows_path_aliases_map_to_original_offsets(self):
+        for query,target in (('parsetuliperror','ParseTulipError'),('strasseerror','StraßeError'),
+                             ('c:/repo/src/main.ts','C:\\repo\\src\\MAIN.ts')):
+            with self.subTest(query=query):
+                source='prefix_'*500+'; '+target+'; '+'suffix_'*500
+                windows=code_windows(source,query,120,context_lines=0)
+                self.assertIn(target,''.join(w['text'] for w in windows))
+                self.assertExact(source,windows,120)
+
     def test_unknown_multilingual_prose_remains_literal_without_fact_extraction(self):
         source='Первый комментарий.\n注释保留原文。\n'+'其他普通说明。\n'*80
         windows=code_windows(source,'完全未知的术语',80)
@@ -158,6 +167,196 @@ class CodeWindowTests(unittest.TestCase):
         with self.assertRaises(ValueError):render_code_windows('abcd',[dict(start=2,end=4,text='cd'),dict(start=0,end=2,text='ab')])
         self.assertEqual(code_windows('abc','abc',0),[])
         self.assertEqual(code_windows('abc','abc',excluded_ranges=[(0,3)]),[])
+
+    def test_long_python_complete_decorated_multiline_function_import_and_test(self):
+        source=('from nonexistent_codec import unpack as wire_unpack\r\n'
+                'from irrelevant_private import UNUSED_PRIVATE_ALIAS\r\n'+
+                '# unrelated preamble\r\n'*200+
+                '@trace_call\r\nasync def read_widget(\r\n'
+                '    payload: bytes,\r\n    *, strict: bool = True,\r\n) -> dict:\r\n'
+                '    widget = wire_unpack(payload)\r\n'
+                '    if strict and not widget:\r\n        raise WidgetValidationError\r\n'
+                '    widget["ready"] = True\r\n    return finish_widget(widget)\r\n'+
+                '# unrelated separation\r\n'*30+
+                'def test_widget_roundtrip():\r\n    result = read_widget(b"example")\r\n'
+                '    assert result["ready"] is True\r\n'
+                'def irrelevant_private():\r\n    return "UNRELATED-PRIVATE-BODY"\r\n')
+        windows=code_windows(source,'WidgetValidationError',1600,context_lines=0)
+        literal=''.join(w['text'] for w in windows)
+        self.assertExact(source,windows,1600)
+        for value in ('@trace_call\r\nasync def read_widget(','from nonexistent_codec import unpack as wire_unpack\r\n',
+                      'return finish_widget(widget)\r\n','assert result["ready"] is True\r\n'):
+            self.assertIn(value,literal)
+        self.assertNotIn('UNUSED_PRIVATE_ALIAS',literal)
+        self.assertNotIn('UNRELATED-PRIVATE-BODY',literal)
+
+    def test_complete_method_keeps_class_signature_without_other_methods(self):
+        source='# filler\n'*300+'class WidgetParser:\n    @trace_call\n    def decode(self, raw):\n'
+        source+='        pieces = raw.split(":")\n        if not pieces:\n            raise WidgetDecodeError\n'
+        source+='        return complete_widget(pieces)\n    def unrelated(self):\n        return "PRIVATE-SIBLING-METHOD"\n'
+        windows=code_windows(source,'WidgetDecodeError',900,context_lines=0)
+        literal=''.join(w['text'] for w in windows)
+        self.assertIn('class WidgetParser:\n',literal)
+        self.assertIn('    @trace_call\n    def decode(self, raw):\n',literal)
+        self.assertIn('return complete_widget(pieces)\n',literal)
+        self.assertNotIn('PRIVATE-SIBLING-METHOD',literal)
+        self.assertExact(source,windows,900)
+
+    def test_python_triple_quoted_braces_and_fake_definitions_do_not_end_scope(self):
+        source='# filler\n'*250+'def read_note():\n    note = """}\ndef fake():\n"""\n'
+        source+='    value = clean_note(note)\n    return NoteTailSentinel(value)\n'
+        windows=code_windows(source,'read_note',700,context_lines=0)
+        self.assertIn('return NoteTailSentinel(value)\n',''.join(w['text'] for w in windows))
+        self.assertExact(source,windows,700)
+
+    def test_referenced_multiline_import_is_exact_and_unused_import_is_absent(self):
+        source=('from widget_codec import (\n    decode_packet as decode_wire,\n    PacketShape,\n)\n'
+                'from private_codec import SecretUnreferenced\n'+'# filler\n'*250+
+                'def decode_record(payload: PacketShape):\n    return decode_wire(payload)\n')
+        windows=code_windows(source,'decode_record',500,context_lines=0)
+        literal=''.join(w['text'] for w in windows)
+        self.assertIn('from widget_codec import (\n    decode_packet as decode_wire,\n    PacketShape,\n)\n',literal)
+        self.assertNotIn('SecretUnreferenced',literal)
+        self.assertExact(source,windows,500)
+
+    def test_related_callers_are_same_file_direct_and_not_shadowed(self):
+        source=('# filler\n'*250+'def decode_record(raw):\n    if not raw:\n        raise WidgetInputError\n'
+                '    return finish_record(raw)\n'+
+                '# separate\n'*25+
+                'def test_good_call():\n    value = decode_record(b"ok")\n    assert value.ready\n'
+                'def test_shadowed_call(decode_record):\n    decode_record()\n    return "SHADOW-PRIVATE-TAIL"\n'
+                'def unrelated_attribute_call(other):\n    other.decode_record()\n    return "ATTRIBUTE-PRIVATE-TAIL"\n')
+        windows=code_windows(source,'WidgetInputError',1300,context_lines=0)
+        literal=''.join(w['text'] for w in windows)
+        self.assertIn('assert value.ready\n',literal)
+        self.assertNotIn('SHADOW-PRIVATE-TAIL',literal)
+        self.assertNotIn('ATTRIBUTE-PRIVATE-TAIL',literal)
+        self.assertExact(source,windows,1300)
+
+    def test_same_named_function_in_another_explicit_file_is_not_a_dependency(self):
+        source=('# File: src/actual.py\n'+'# filler\n'*250+
+                'def decode_record(raw):\n    raise ActualRecordError\n    return raw\n'
+                '# File: tests/another_module.py\n'
+                'def test_other_module():\n    decode_record(b"other")\n    return "CROSS-FILE-PRIVATE-TAIL"\n')
+        windows=code_windows(source,'ActualRecordError',900,context_lines=0)
+        self.assertIn('# File: src/actual.py\n',''.join(w['text'] for w in windows))
+        self.assertNotIn('CROSS-FILE-PRIVATE-TAIL',''.join(w['text'] for w in windows))
+        self.assertExact(source,windows,900)
+
+    def test_other_markdown_code_fence_is_not_a_dependency(self):
+        source=('```python\n'+'# filler\n'*250+
+                'def decode_record(raw):\n    raise ActualRecordError\n    return raw\n```\n'
+                '```python\ndef test_other_file():\n    decode_record(b"other")\n'
+                '    return "OTHER-FENCE-PRIVATE-TAIL"\n```\n')
+        windows=code_windows(source,'ActualRecordError',900,context_lines=0)
+        self.assertNotIn('OTHER-FENCE-PRIVATE-TAIL',''.join(w['text'] for w in windows))
+        self.assertExact(source,windows,900)
+
+    def test_excluded_middle_of_body_blocks_complete_function_and_dependencies(self):
+        source=('from widget_codec import decode_wire\n'+'# filler\n'*200+
+                'def decode_record(raw):\n    hidden = "WITHHELD-PRIVATE-LINE"\n'
+                '    value = decode_wire(raw)\n    return VisibleTargetError(value)\n')
+        left=source.index('    hidden');right=source.index('    value')
+        windows=code_windows(source,'VisibleTargetError',1200,context_lines=0,excluded_ranges=[(left,right)])
+        literal=''.join(w['text'] for w in windows)
+        self.assertNotIn('WITHHELD-PRIVATE-LINE',literal)
+        self.assertNotIn('def decode_record',literal)
+        self.assertNotIn('from widget_codec',literal)
+        self.assertTrue(all('complete-static-function' not in w['reason'] for w in windows))
+        self.assertIn('VisibleTargetError',literal)
+        self.assertExact(source,windows,1200)
+
+    def test_excluded_gap_between_import_and_function_is_not_a_bridge(self):
+        source=('from widget_codec import decode_wire\n'+'# filler\n'*200+
+                'PRIVATE-BRIDGE-LINE\n'+'# filler\n'*20+
+                'def decode_record(raw):\n    return decode_wire(raw)\n')
+        left=source.index('PRIVATE');right=source.index('\n',left)+1
+        windows=code_windows(source,'decode_record',700,context_lines=1,excluded_ranges=[(left,right)])
+        literal=''.join(w['text'] for w in windows)
+        self.assertIn('return decode_wire(raw)\n',literal)
+        self.assertNotIn('from widget_codec',literal)
+        self.assertNotIn('PRIVATE-BRIDGE-LINE',literal)
+        self.assertExact(source,windows,700)
+
+    def test_withheld_final_statement_cannot_make_prefix_a_complete_function(self):
+        source='# filler\n'*200+'def decode_record(raw):\n    value = ordinary_step(raw)\n'
+        source+='    return "WITHHELD-CRITICAL-TAIL"\n'
+        left=source.index('    return');right=len(source)
+        windows=code_windows(source,'decode_record',500,context_lines=1,excluded_ranges=[(left,right)])
+        literal=''.join(w['text'] for w in windows)
+        self.assertNotIn('WITHHELD-CRITICAL-TAIL',literal)
+        self.assertTrue(all('complete-static-function' not in w['reason'] for w in windows))
+        self.assertIn('[SOURCE GAP chars=',render_code_windows(source,windows))
+        self.assertExact(source,windows,500)
+
+    def test_oversized_function_keeps_match_and_signature_with_explicit_gaps(self):
+        source='# filler\n'*200+'def decode_record(\n    raw: bytes,\n) -> dict:\n'
+        source+='    value = ordinary_step(raw)\n'*100+'    return TargetTailError(value)\n'
+        windows=code_windows(source,'TargetTailError',180,context_lines=0)
+        literal=''.join(w['text'] for w in windows)
+        self.assertIn('def decode_record(\n    raw: bytes,\n) -> dict:\n',literal)
+        self.assertIn('return TargetTailError(value)\n',literal)
+        self.assertTrue(all('complete-static-function' not in w['reason'] for w in windows))
+        self.assertIn('[SOURCE GAP chars=',render_code_windows(source,windows))
+        self.assertExact(source,windows,180)
+
+    def test_typescript_complete_function_import_call_body_and_actual_fences(self):
+        source=('File: src/widget.ts\r\n```typescript\r\n'
+                'import { decodeWire as unpackWire } from "./wire";\r\n'+
+                '// filler\r\n'*200+
+                'export async function readWidget(\r\n  payload: Uint8Array,\r\n): Promise<Widget> {\r\n'
+                '  const punctuation = "} is quoted";\r\n  /* { a comment } */\r\n'
+                '  const widget = unpackWire(payload);\r\n  if (!widget) {\r\n    throw new WidgetReadError();\r\n  }\r\n'
+                '  return finishWidget(widget);\r\n}\r\n'+
+                '// separate\r\n'*25+
+                'function testWidget() {\r\n  const widget = readWidget(example);\r\n  assertWidgetReady(widget);\r\n}\r\n```\r\n')
+        windows=code_windows(source,'WidgetReadError',1700,context_lines=0)
+        literal=''.join(w['text'] for w in windows)
+        for value in ('import { decodeWire as unpackWire } from "./wire";\r\n',
+                      'export async function readWidget(\r\n','return finishWidget(widget);\r\n}\r\n',
+                      'assertWidgetReady(widget);\r\n','```typescript\r\n','```\r\n'):
+            self.assertIn(value,literal)
+        self.assertExact(source,windows,1700)
+
+    def test_javascript_arrow_and_class_method_keep_only_their_complete_body(self):
+        cases=(('const readWidget = async (raw) => {\n  const value = clean(raw);\n  return ArrowTail(value);\n};\n',
+                'readWidget','return ArrowTail(value);\n};\n'),
+               ('class WidgetReader {\n  async readWidget(raw) {\n    const value = clean(raw);\n    return MethodTail(value);\n  }\n'
+                '  privateOther() {\n    return "PRIVATE-METHOD-TAIL";\n  }\n}\n',
+                'readWidget','return MethodTail(value);\n  }\n'))
+        for code,query,tail in cases:
+            with self.subTest(query=query,tail=tail):
+                source='// filler\n'*200+code
+                windows=code_windows(source,query,900,context_lines=0)
+                literal=''.join(w['text'] for w in windows)
+                self.assertIn(tail,literal)
+                self.assertNotIn('PRIVATE-METHOD-TAIL',literal)
+                self.assertExact(source,windows,900)
+
+    def test_ambiguous_or_incomplete_brace_syntax_uses_literal_fallback(self):
+        for body in ('const pattern = /}/;\n','const template = `result ${value}`;\n','/* unclosed comment\n'):
+            source='// filler\n'*200+'function readWidget() {\n'+body+'  return AmbiguousTarget;\n}\n'
+            windows=code_windows(source,'AmbiguousTarget',200,context_lines=0)
+            self.assertIn('AmbiguousTarget',''.join(w['text'] for w in windows))
+            self.assertTrue(all('complete-static-function' not in w['reason'] for w in windows))
+            self.assertExact(source,windows,200)
+
+    def test_static_parser_segment_limit_and_single_window_budget_are_respected(self):
+        source='#'+('x'*200001)+'\ndef readWidget():\n    return SegmentLimitTarget\n'
+        windows=code_windows(source,'SegmentLimitTarget',100,context_lines=0)
+        self.assertTrue(all('complete-static-function' not in w['reason'] for w in windows))
+        self.assertExact(source,windows,100)
+        source='import math\n'+'# filler\n'*250+'def readWidget():\n    return math.sqrt(4)\n'
+        windows=code_windows(source,'readWidget',150,max_windows=1,context_lines=0)
+        self.assertIn('return math.sqrt(4)\n',''.join(w['text'] for w in windows))
+        self.assertExact(source,windows,150,max_windows=1)
+
+    def test_many_function_limit_opts_out_without_losing_literal_match(self):
+        source=''.join(f'def unit_{index}():\n    return result_{index}\n' for index in range(257))
+        windows=code_windows(source,'result_256',100,context_lines=0)
+        self.assertIn('result_256',''.join(w['text'] for w in windows))
+        self.assertTrue(all('complete-static-function' not in w['reason'] for w in windows))
+        self.assertExact(source,windows,100)
 
 
 if __name__=='__main__':unittest.main()

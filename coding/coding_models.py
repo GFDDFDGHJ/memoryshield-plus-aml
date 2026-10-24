@@ -5,6 +5,7 @@ import httpx
 
 from coding_reranker import (RerankerClient, MAX_DOCUMENTS, MAX_QUERY_BYTES,
                             MAX_DOCUMENT_BYTES, MAX_WEIGHTED_INPUT_BYTES)
+from ranking_copies import prepare_ranking
 
 def embedding_parts(text, max_bytes=6000):
     """UTF-8 bounded copies for the provider; their mean covers the full text."""
@@ -82,19 +83,15 @@ class ModelProvider:
         if not self.settings.rerank_enabled or not self.rank_slots.acquire(blocking=False):
             return None
         try:
-            # Rank a bounded leading recall pool; return the untouched tail in
-            # the full permutation so a provider-size limit drops no evidence.
-            query_cost = min(MAX_QUERY_BYTES,len(query.encode('utf-8')))
-            count,used = 0,0
-            for document in documents[:MAX_DOCUMENTS]:
-                cost = query_cost + min(MAX_DOCUMENT_BYTES,len(document.encode('utf-8')))
-                if used+cost > MAX_WEIGHTED_INPUT_BYTES:
-                    break
-                used += cost
-                count += 1
+            # Ranking copies retain matching lines and trailing constraints;
+            # budget is shared over the pool instead of taking long prefixes.
+            ranking_query,copies = prepare_ranking(query,documents,
+                max_documents=MAX_DOCUMENTS,max_query_bytes=MAX_QUERY_BYTES,
+                max_document_bytes=MAX_DOCUMENT_BYTES,max_weighted_bytes=MAX_WEIGHTED_INPUT_BYTES)
+            count = len(copies)
             if count < 2:
                 return None
-            order = self.ranker.rerank(query,documents[:count])
+            order = self.ranker.rerank(ranking_query,copies)
             if order is None:
                 return None
             return list(order)+list(range(count,len(documents)))

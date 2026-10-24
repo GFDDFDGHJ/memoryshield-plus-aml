@@ -63,7 +63,7 @@ class CodingApiContractTests(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         health = response.json()
         self.assertEqual(health['track'],'coding')
-        self.assertEqual(health['version'],'v1.0.1')
+        self.assertEqual(health['version'],'v4.1.0')
         self.assertEqual(health['embedding_model'],'text-embedding-v4')
         self.assertEqual(health['source_revision'],'invented-test-revision')
         self.assertNotIn('offline-coding-auth',response.text)
