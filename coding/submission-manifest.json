@@ -1,0 +1,24 @@
+{
+  "system": "MemoryShield+ Coding",
+  "version": "v1.0.0",
+  "track": "coding",
+  "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
+  "files": {
+    ".gitignore": "c573395064432adc322e1874448dcc95c8df85eed428d1274504d6d6b9c1ac14",
+    "README.md": "723623312feda3a2e224a3cf6d34dba386424dafdfcba71a8f8ab89abce5f88c",
+    "requirements.txt": "9bbb9cde6ad070245c13325e48a22bcfbae3aa18c1296b5ccc88fa47460e5b33",
+    "app.py": "c632d7a6386acee5f386c9ed63d85aead6a91bd5912da55f0321b8c1ee301724",
+    "coding_config.py": "e63dc4e8c711b277c903618ab51b54c7eb361e3d7d4db1a9c718efbfa572a175",
+    "coding_models.py": "612d32800c66bb0e5d0857a7415eb2a960d5bd5598d832da67675eee9b8cb4f7",
+    "coding_reranker.py": "6da19995b3a7cc461bcb7930106367144900512cfcca462a71be5ed82a29741a",
+    "coding_store.py": "c0c43234f57315500960ec641239346bdf082df42d8c036f5bdee6891690fbe0",
+    "code_windows.py": "ec887be02128ed66c11699eb4390c231691cb35bed6d3687f2aa0d2056573666",
+    "watcher.ps1": "9126aef55a4212efd33551672fa54f66618b78b560ef96c39780420fc1a26055",
+    "test_code_windows.py": "85ed07003f5025917cb49a5b0d68f30d432d97358db288b88288dc94edd0779f",
+    "test_coding_store.py": "2090bd836571a9577a6f7246554230a33e2474ae1964af66d032dba6e087b0ce",
+    "test_api_contract.py": "90f8ef2eb5827b3657bac00504cdba45743ced6be1b7a4c4e2e6a426bfd263ce",
+    "test_coding_models.py": "91bb4680a7432a9b39b41d1e2182d33b20fd1a5fbdd71ee6ff935e2c9ad58290",
+    "test_coding_reranker.py": "b3ceb43a776d619358f66006798c8c74ba34c64b0f8fe0e6a94e68e1cfc92ac8",
+    "prepare_submission.py": "0c80f8957fb0455cda86005a40b89995d5375fcf1f9e983511b7a624d5f93892"
+  }
+}
