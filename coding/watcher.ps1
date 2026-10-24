@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $dir = [IO.Path]::GetFullPath($PSScriptRoot)
 Set-Location -LiteralPath $dir
-$expectedVersion = 'v4.1.0'
+$expectedVersion = 'v4.1.1'
 $py = if ($env:CODING_PYTHON) { $env:CODING_PYTHON } else {
     'C:\Users\Administrator\AppData\Local\Doubao\User Data\sandbox_runtime\bases\772984f6fd3a8ae0ae7d2422cd7c2bfa\python\python.exe'
 }
@@ -19,7 +19,7 @@ function Configure-Coding {
     if (Test-Path -LiteralPath $releaseFile) {
         $env:CODING_SOURCE_REVISION = (Get-Content -LiteralPath $releaseFile -Raw | ConvertFrom-Json).commit
     }
-    & $py -c "from coding_config import CONFIG; import fastapi,httpx,uvicorn; assert CONFIG.auth_token and CONFIG.embedding_key; assert CONFIG.version=='v4.1.0' and CONFIG.dim==1024" *> $null
+    & $py -c "from coding_config import CONFIG; import fastapi,httpx,uvicorn; assert CONFIG.auth_token and CONFIG.embedding_key; assert CONFIG.version=='v4.1.1' and CONFIG.dim==1024" *> $null
     if ($LASTEXITCODE -ne 0) { throw 'Coding startup configuration failed' }
 }
 function Healthy {

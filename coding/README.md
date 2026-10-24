@@ -1,6 +1,9 @@
 # MemoryShield+ Coding
 
-Coding release: **v4.1.0**, aligned with the submitted Coding version sequence. This is a separate service from
+Coding release: **v4.1.1**, aligned with the submitted Coding version sequence.
+This small release adds gateway compatibility for the original Memory System
+Key; the storage, retrieval, window and model algorithms remain those of v4.1.0.
+This is a separate service from
 the frozen Textual v3.15.0 submission in the repository root.
 
 ## Isolation and endpoints
@@ -11,7 +14,8 @@ the frozen Textual v3.15.0 submission in the repository root.
 | Local API | existing 8080 | 127.0.0.1:8181 |
 | Source | repository root | this `coding/` directory |
 | Database | existing Textual database | `aml_coding_v4.db` |
-| Auth | existing Textual credential | `.secrets/auth_token.txt` in this folder |
+| Public original Key | Textual when the gateway's local legacy mode is `textual` | Coding when the local legacy mode is `coding` |
+| Dedicated Coding Key | never selects Textual | always selects Coding; backend key at `.secrets/auth_token.txt` |
 | Supervisor/logs | existing Textual supervisor | this folder's watcher and logs |
 
 Coding URLs after deployment:
@@ -21,9 +25,13 @@ Coding URLs after deployment:
 - Health: `https://hlq5070.tail50f4d4.ts.net/health`
 
 The existing Textual source files, database and running processes are
-not replaced. The same public Add/Search URLs use separate Memory System Keys
-to select fixed isolated backends through the shared `../ingress/` gateway. Both services share the physical host and paid provider account;
-they do not share memories or authentication tokens. Coding bounds searches
+not replaced. The same public Add/Search URLs accept the original Memory System
+Key through the shared `../ingress/` gateway. Its explicit local mode selects
+one isolated backend at a time; this release's Coding evaluation mode is
+**`coding`**. The gateway substitutes the selected backend's internal credential.
+The dedicated Coding Key always selects Coding, independently of that mode.
+Both services share the physical host and paid provider account; their memory
+databases and backend credentials remain separate. Coding bounds searches
 to two in flight and provider calls to two embeddings/two reranks per process.
 Additional requests wait; a requested evaluation concurrency is an upper bound.
 
@@ -82,10 +90,18 @@ dedicated `.secrets/auth_token.txt`. The watcher refreshes the persisted provide
 key and pins its own database path before each launch. Keep credentials out of
 source control. Start this folder's watcher hidden; it supervises only the
 Coding API. Funnel 443 forwards to the shared gateway on 8282; it routes to
-this backend on 8181 using the Coding key. See `../ingress/README.md`.
+this backend on 8181 in local `coding` mode for the original Key, or whenever
+the dedicated Coding Key is supplied. See `../ingress/README.md`.
 
-Clients use `Authorization: Bearer <Coding Memory System Key>`. Health is
-public (anonymous health reports Textual; the Coding key selects Coding health).
+Clients may continue using `Authorization: Bearer <original Memory System Key>`
+and the original URLs. Before a Coding evaluation, select local gateway mode
+`coding`; before returning to Textual, select `textual`. Only switch after all
+Smoke and Full evaluations have completed. Shared-Key compatibility supports
+one track at a time. No request content, `track` field or header changes the mode.
+The dedicated Coding Key always selects Coding. Health is public: anonymous
+health reports Textual, original-Key health follows the local mode, and dedicated
+Coding-Key health reports Coding. Verify the actual mode using
+`/__gateway_health` before launching an evaluation.
 Add/Search follow the official text/Coding request envelope and echo
 all required Add identifiers. Search returns evidence strings in `data` and
 never more than `top_k` (capped at 100). No arbitrary 20-message Add cap is
@@ -100,8 +116,11 @@ separate measurement; no official Smoke or Full is launched by these scripts.
 ## Submission
 
 Register a separate Coding system/version, such as **MemoryShield+ Coding /
-v4.1.0**, with the shared URLs and its dedicated Memory System Key. An existing
-Eval Key may need the new version and Coding track approved/bound by AML.
+v4.1.1**, with the shared URLs and the existing original Memory System Key.
+Select the Coding version/track in the evaluation platform and set the local
+gateway mode to `coding` before running. The organizer does not need to replace
+the Memory System Key for this compatibility mode. An existing Eval Key may
+still need the new version and Coding track approved/bound by AML.
 Do not replace the Textual version's endpoint registration.
 
 The storage/ranking/window implementation is new for this exploratory service.
@@ -110,10 +129,13 @@ Textual v3.15.0 source; see the parent repository for its development history.
 The existing project and reused third-party dependencies remain attributed.
 
 The initial backend used internal versions v1.0.0/v1.0.1; the website run label
-v4.0 is not proof that it used that backend. v4.1.0 aligns the code release name
-with the participant's website sequence. Use the dedicated Coding Memory System
-Key when registering this version; the existing Textual key selects Textual
-regardless of a website track/version label. Neither key changes in this release.
+v4.0 is not proof that it used that backend. v4.1.0 aligned the code release name
+with the participant's website sequence; v4.1.1 adds original-Key gateway
+compatibility without changing the memory algorithms. The original Key now
+follows the operator's explicit local mode, independently of a website
+track/version label. Both public endpoint URLs and both credentials remain
+unchanged. Run Textual again only after all evaluations finish and the local
+mode has been switched back to `textual`.
 
 The shared gateway source remains in `../ingress/` at the same repository
 commit, with its own source archive and manifest. Timestamped access logging

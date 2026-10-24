@@ -1,5 +1,6 @@
 """Offline gateway contracts: invented credentials, fake upstreams, no sockets."""
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import gzip
 import hashlib
 import importlib.util
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0,str(ROOT))  # Match the gateway's standalone --app-dir import.
 SPEC = importlib.util.spec_from_file_location('offline_track_gateway', ROOT / 'gateway.py')
 gateway = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = gateway
@@ -255,6 +257,233 @@ class GatewayContractTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs, empty=not bool(text_key and code_key)):
                 with self.assertRaises(ValueError):
                     gateway.GatewaySettings(text_key, code_key, **kwargs)
+
+
+class LegacyModeGatewayContractTests(unittest.TestCase):
+    """Only fake keys/mode readers/transports: never a live mode file."""
+    def setUp(self):
+        self.calls=[]
+        self.call_lock=threading.Lock()
+        self.respond=lambda request:httpx.Response(200,content=request.content)
+        self.started=threading.Event()
+        self.release=threading.Event()
+        self.block_legacy=False
+        self.client=None
+        self.settings_guard=patch.object(gateway,'load_settings',side_effect=AssertionError('No live secrets'))
+        self.settings_guard.start()
+        self.addCleanup(self.settings_guard.stop)
+
+    def tearDown(self):
+        self.release.set()
+        if self.client is not None:self.client.__exit__(None,None,None)
+
+    def start(self,target='coding',controller=None):
+        self.settings=gateway.GatewaySettings(TEXT_KEY,CODE_KEY,legacy_key_target=target)
+        async def upstream(request):
+            with self.call_lock:self.calls.append(request)
+            if self.block_legacy and request.headers.get('x-invented-test-block') is None:
+                # Only the first POST blocks; health/private Code remain usable.
+                if request.method=='POST' and len(self.calls)==1:
+                    self.started.set()
+                    released=await asyncio.to_thread(self.release.wait,5)
+                    if not released:raise AssertionError('Offline test release timed out')
+            return self.respond(request)
+        self.client=TestClient(gateway.create_app(self.settings,transport=httpx.MockTransport(upstream),
+                                                mode_controller=controller))
+        self.client.__enter__()
+        socket_guard=patch.object(socket.socket,'connect',side_effect=AssertionError('No real sockets'))
+        socket_guard.start()
+        self.addCleanup(socket_guard.stop)
+        return self.client
+
+    def send(self,path='/add',*,key=TEXT_KEY,body=b'{}',headers=None):
+        supplied={'Authorization':'Bearer '+key,'Content-Type':'application/json'}
+        if headers:supplied.update(headers)
+        return self.client.post(path,content=body,headers=supplied)
+
+    def assert_destination(self,response,port,token,track,path):
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.headers['x-memory-track'],track)
+        self.assertEqual(str(self.calls[-1].url),f'http://127.0.0.1:{port}{path}')
+        self.assertEqual(self.calls[-1].headers['authorization'],'Bearer '+token)
+
+    def test_default_legacy_mode_is_textual(self):
+        self.assertEqual(gateway.GatewaySettings(TEXT_KEY,CODE_KEY).legacy_key_target,'textual')
+        self.start('textual')
+        for path in ('/add','/search'):
+            result=self.send(path)
+            self.assert_destination(result,8080,TEXT_KEY,'textual',path)
+
+    def test_original_key_targets_code_and_replaces_internal_auth_in_coding_mode(self):
+        self.start('coding')
+        payload=b'  {not-json; "track":"textual"}\x00\r\n'
+        for path in ('/add','/search'):
+            result=self.send(path,body=payload)
+            self.assert_destination(result,8181,CODE_KEY,'coding',path)
+            self.assertEqual(self.calls[-1].content,payload)
+            self.assertEqual(result.content,payload)
+            self.assertNotIn(TEXT_KEY,self.calls[-1].headers.values())
+
+    def test_old_and_private_keys_can_both_target_code_without_double_writes(self):
+        self.start('coding')
+        for key in (TEXT_KEY,CODE_KEY):
+            result=self.send('/search',key=key)
+            self.assert_destination(result,8181,CODE_KEY,'coding','/search')
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual([request.url.port for request in self.calls],[8181,8181])
+
+    def test_request_content_track_query_and_headers_cannot_change_local_mode(self):
+        target=['coding']
+        controller=gateway.LegacyModeController(lambda:target[0])
+        self.start('textual',controller)
+        for mode,port,token in (('coding',8181,CODE_KEY),('textual',8080,TEXT_KEY)):
+            target[0]=mode
+            opposite='textual' if mode=='coding' else 'coding'
+            payload=json.dumps({'track':opposite,'legacy_key_target':opposite,
+                                'user_id':'invented-'+opposite,'query':'def choose_mode(): pass',
+                                'messages':[{'role':'user','content':'Natural prose '+opposite}]}).encode()
+            result=self.send('/search?track='+opposite+'&legacy_key_target='+opposite,body=payload,
+                             headers={'X-Memory-Track':opposite,'X-Legacy-Key-Target':opposite,
+                                      'X-Forwarded-Host':'invalid.example','Host':'invalid.example'})
+            self.assert_destination(result,port,token,mode,'/search')
+            self.assertEqual(self.calls[-1].content,payload)
+            for header in ('x-memory-track','x-legacy-key-target','x-forwarded-host'):
+                self.assertNotIn(header,self.calls[-1].headers)
+            self.assertEqual(controller.status()['legacy_key_target'],mode)
+            self.assertEqual(controller.status()['legacy_active_requests'],0)
+
+    def test_health_is_anonymous_text_old_key_current_mode_private_key_fixed_code(self):
+        target=['coding'];controller=gateway.LegacyModeController(lambda:target[0])
+        self.start('textual',controller)
+        for key,port,track,token in ((None,8080,'textual',TEXT_KEY),(TEXT_KEY,8181,'coding',CODE_KEY),
+                                     (CODE_KEY,8181,'coding',CODE_KEY)):
+            headers={'Authorization':'Bearer '+key} if key else {}
+            response=self.client.get('/health',headers=headers)
+            self.assert_destination(response,port,token,track,'/health')
+            self.assertEqual(controller.status()['legacy_active_requests'],0)
+        count=len(self.calls)
+        response=self.client.get('/__gateway_health')
+        status=response.json()
+        self.assertEqual(len(self.calls),count)
+        for name in ('legacy_key_target','requested_legacy_key_target','legacy_active_requests',
+                     'legacy_config_valid','legacy_switch_pending'):
+            self.assertIn(name,status)
+        self.assertEqual(status['legacy_key_target'],'coding')
+        self.assertEqual(status['legacy_active_requests'],0)
+        self.assertEqual(status['active_memory_requests'],0)
+        self.assertTrue(status['legacy_config_valid'])
+        self.assertFalse(status['legacy_switch_pending'])
+        self.assertNotIn(TEXT_KEY,response.text)
+        self.assertNotIn(CODE_KEY,response.text)
+
+    def test_unknown_key_is_rejected_even_when_legacy_mode_is_code(self):
+        self.start('coding')
+        for path in ('/add','/search'):
+            self.assertEqual(self.send(path,key='invented-unknown-key').status_code,401)
+        self.assertEqual(self.calls,[])
+
+    def test_invalid_mode_fails_closed_while_private_code_and_anonymous_health_work(self):
+        target=['invented-invalid-mode']
+        controller=gateway.LegacyModeController(lambda:target[0])
+        self.start('textual',controller)
+        for path in ('/add','/search'):
+            response=self.send(path)
+            self.assertEqual(response.status_code,503)
+            self.assertNotIn(TEXT_KEY,response.text)
+            self.assertNotIn(CODE_KEY,response.text)
+        self.assertEqual(self.client.get('/health',headers={'Authorization':'Bearer '+TEXT_KEY}).status_code,503)
+        self.assertEqual(self.calls,[])
+        status=controller.status()
+        self.assertFalse(status['legacy_config_valid'])
+        self.assertEqual(status['legacy_active_requests'],0)
+        self.assert_destination(self.send(key=CODE_KEY),8181,CODE_KEY,'coding','/add')
+        self.assert_destination(self.client.get('/health'),8080,TEXT_KEY,'textual','/health')
+        target[0]='coding'
+        self.assert_destination(self.send('/search'),8181,CODE_KEY,'coding','/search')
+
+    def test_mode_reader_error_does_not_expose_detail_or_change_private_code(self):
+        def fail_reader():raise OSError('invented private mode-file detail '+TEXT_KEY)
+        controller=gateway.LegacyModeController(fail_reader)
+        self.start('textual',controller)
+        response=self.send('/search')
+        self.assertEqual(response.status_code,503)
+        self.assertNotIn(TEXT_KEY,response.text)
+        self.assertNotIn('private mode-file',response.text)
+        self.assertEqual(self.calls,[])
+        self.assert_destination(self.send('/search',key=CODE_KEY),8181,CODE_KEY,'coding','/search')
+
+    def test_active_request_stays_on_old_target_pending_rejects_then_new_mode_applies(self):
+        target=['textual'];controller=gateway.LegacyModeController(lambda:target[0])
+        self.start('textual',controller)
+        self.block_legacy=True
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first=executor.submit(self.send,'/add',body=b'first-invented-body')
+            try:
+                self.assertTrue(self.started.wait(3),'Initial request did not reach fake upstream')
+                self.assertEqual(controller.status()['legacy_active_requests'],1)
+                target[0]='coding'
+                rejected=self.send('/search',body=b'second-invented-body')
+                self.assertEqual(rejected.status_code,503)
+                self.assertEqual(rejected.headers['retry-after'],'1')
+                self.assertEqual(len(self.calls),1)
+                status=self.client.get('/__gateway_health').json()
+                self.assertEqual(status['legacy_key_target'],'textual')
+                self.assertEqual(status['requested_legacy_key_target'],'coding')
+                self.assertEqual(status['legacy_active_requests'],1)
+                self.assertEqual(status['active_memory_requests'],1)
+                self.assertTrue(status['legacy_switch_pending'])
+                # An explicit private key is independent of the busy legacy mode.
+                explicit=self.send('/search',key=CODE_KEY,body=b'private-code-body')
+                self.assert_destination(explicit,8181,CODE_KEY,'coding','/search')
+                self.assertEqual(controller.status()['legacy_active_requests'],1)
+            finally:self.release.set()
+            result=first.result(timeout=3)
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(result.headers['x-memory-track'],'textual')
+        self.assertEqual(result.content,b'first-invented-body')
+        self.assertEqual(self.calls[0].url.port,8080)
+        self.assertEqual(self.calls[0].headers['authorization'],'Bearer '+TEXT_KEY)
+        self.assertEqual(controller.status()['legacy_active_requests'],0)
+        self.assertEqual(self.client.get('/__gateway_health').json()['active_memory_requests'],0)
+        self.assert_destination(self.send('/search'),8181,CODE_KEY,'coding','/search')
+        self.assertFalse(controller.status()['legacy_switch_pending'])
+
+    def test_timeout_holds_active_until_error_then_releases_without_fallback(self):
+        target=['coding'];controller=gateway.LegacyModeController(lambda:target[0])
+        self.start('textual',controller)
+        self.block_legacy=True
+        def timeout(request):raise httpx.ReadTimeout('invented timeout '+CODE_KEY,request=request)
+        self.respond=timeout
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            task=executor.submit(self.send,'/search')
+            try:
+                self.assertTrue(self.started.wait(3))
+                self.assertEqual(controller.status()['legacy_active_requests'],1)
+            finally:self.release.set()
+            result=task.result(timeout=3)
+        self.assertEqual(result.status_code,504)
+        self.assertEqual(controller.status()['legacy_active_requests'],0)
+        self.assertEqual(self.client.get('/__gateway_health').json()['active_memory_requests'],0)
+        self.assertEqual([request.url.port for request in self.calls],[8181])
+        self.assertNotIn(CODE_KEY,result.text)
+        self.respond=lambda request:httpx.Response(200,content=b'recovered')
+        target[0]='textual'
+        self.assert_destination(self.send('/search'),8080,TEXT_KEY,'textual','/search')
+
+    def test_connect_failure_and_unexpected_error_both_release_active_counter(self):
+        controller=gateway.LegacyModeController(lambda:'coding')
+        self.start('textual',controller)
+        def fail_connect(request):raise httpx.ConnectError('invented backend detail',request=request)
+        self.respond=fail_connect
+        self.assertEqual(self.send('/add').status_code,503)
+        self.assertEqual(controller.status()['legacy_active_requests'],0)
+        self.assertEqual(self.client.get('/__gateway_health').json()['active_memory_requests'],0)
+        self.assertEqual([request.url.port for request in self.calls],[8181])
+        def fail_unexpected(request):raise RuntimeError('invented unexpected failure')
+        self.respond=fail_unexpected
+        with self.assertRaises(RuntimeError):self.send('/search')
+        self.assertEqual(controller.status()['legacy_active_requests'],0)
+        self.assertEqual([request.url.port for request in self.calls],[8181,8181])
 
 
 if __name__ == '__main__':

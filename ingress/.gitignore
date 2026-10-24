@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 submission-source.zip
 deployment.json
+legacy_target.json
+legacy_target.switch.lock
+.legacy-target-*.tmp

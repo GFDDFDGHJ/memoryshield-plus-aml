@@ -13,7 +13,7 @@ def _secret(name):
 
 @dataclass(frozen=True)
 class CodingConfig:
-    version: str = 'v4.1.0'
+    version: str = 'v4.1.1'
     db_path: str = os.environ.get('CODING_DB_PATH', str(ROOT / 'aml_coding_v4.db'))
     auth_token: str = os.environ.get('CODING_AUTH_TOKEN', '') or _secret('auth_token.txt')
     embedding_key: str = os.environ.get('CODING_EMBEDDING_API_KEY', '') or _secret('dashscope_api_key.txt') or os.environ.get('DASHSCOPE_API_KEY', '')

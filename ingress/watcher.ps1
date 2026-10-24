@@ -12,7 +12,7 @@ function Log([string]$message) { Add-Content -LiteralPath (Join-Path $dir 'servi
 function Healthy {
     try {
         $state = Invoke-RestMethod -Uri 'http://127.0.0.1:8282/__gateway_health' -TimeoutSec 4
-        return ($state.status -eq 'ok' -and $state.system -eq 'MemoryShield+ track gateway' -and $state.version -eq 'v1.0.0')
+        return ($state.status -eq 'ok' -and $state.system -eq 'MemoryShield+ track gateway' -and $state.version -eq 'v1.1.0')
     } catch { return $false }
 }
 function Gateway-Processes {
@@ -53,7 +53,7 @@ try {
                     $owned | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
                     $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback,8282)
                     try { $listener.Start() } finally { $listener.Stop() }
-                    $arguments = '-m uvicorn gateway:app --app-dir "'+$dir+'" --host 127.0.0.1 --port 8282'
+                    $arguments = '-m uvicorn gateway:app --app-dir "'+$dir+'" --host 127.0.0.1 --port 8282 --workers 1'
                     Start-Process -FilePath $py -ArgumentList $arguments -WorkingDirectory $dir `
                         -RedirectStandardOutput (Join-Path $dir 'server.out.log') `
                         -RedirectStandardError (Join-Path $dir 'server.err.log') -WindowStyle Hidden
