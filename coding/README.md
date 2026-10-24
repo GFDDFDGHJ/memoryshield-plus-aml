@@ -1,13 +1,13 @@
 # MemoryShield+ Coding
 
-Initial exploratory Coding release: **v1.0.0**. This is a separate service from
+Initial exploratory Coding release: **v1.0.1**. This is a separate service from
 the frozen Textual v3.15.0 submission in the repository root.
 
 ## Isolation and endpoints
 
 | Component | Textual | Coding |
 |---|---|---|
-| Public HTTPS port | 443 | 8443 |
+| Public HTTPS port | 443, shared gateway | 443, shared gateway |
 | Local API | existing 8080 | 127.0.0.1:8181 |
 | Source | repository root | this `coding/` directory |
 | Database | existing Textual database | `aml_coding_v4.db` |
@@ -16,12 +16,13 @@ the frozen Textual v3.15.0 submission in the repository root.
 
 Coding URLs after deployment:
 
-- Add: `https://hlq5070.tail50f4d4.ts.net:8443/add`
-- Search: `https://hlq5070.tail50f4d4.ts.net:8443/search`
-- Health: `https://hlq5070.tail50f4d4.ts.net:8443/health`
+- Add: `https://hlq5070.tail50f4d4.ts.net/add`
+- Search: `https://hlq5070.tail50f4d4.ts.net/search`
+- Health: `https://hlq5070.tail50f4d4.ts.net/health`
 
-The existing Textual routes, source files, database and running processes are
-not replaced. Both services share the physical host and paid provider account;
+The existing Textual source files, database and running processes are
+not replaced. The same public Add/Search URLs use separate Memory System Keys
+to select fixed isolated backends through the shared `../ingress/` gateway. Both services share the physical host and paid provider account;
 they do not share memories or authentication tokens. Coding bounds searches
 to two in flight and provider calls to two embeddings/two reranks per process.
 Additional requests wait; a requested evaluation concurrency is an upper bound.
@@ -59,7 +60,8 @@ Install the pinned `requirements.txt` in Python 3.10 or later. Set
 dedicated `.secrets/auth_token.txt`. The watcher refreshes the persisted provider
 key and pins its own database path before each launch. Keep credentials out of
 source control. Start this folder's watcher hidden; it supervises only the
-Coding API. Funnel 8443 is configured separately and must not reset port 443.
+Coding API. Funnel 443 forwards to the shared gateway on 8282; it routes to
+this backend on 8181 using the Coding key. See `../ingress/README.md`.
 
 Clients use `Authorization: Bearer <Coding Memory System Key>`. Health is
 public. Add/Search follow the official text/Coding request envelope and echo
@@ -76,7 +78,7 @@ separate measurement; no official Smoke or Full is launched by these scripts.
 ## Submission
 
 Register a separate Coding system/version, such as **MemoryShield+ Coding /
-v1.0.0**, with the Coding URLs and its dedicated Memory System Key. An existing
+v1.0.1**, with the shared URLs and its dedicated Memory System Key. An existing
 Eval Key may need the new version and Coding track approved/bound by AML.
 Do not replace the Textual version's endpoint registration.
 
@@ -84,3 +86,7 @@ The storage/ranking/window implementation is new for this exploratory service.
 The bounded reranker client is reused unchanged from this project's reviewed
 Textual v3.15.0 source; see the parent repository for its development history.
 The existing project and reused third-party dependencies remain attributed.
+
+The v1.0.1 patch changes shared-URL deployment metadata only; the memory
+algorithms remain those of v1.0.0. The shared gateway source is in `../ingress/`
+at the same repository commit, with its own source archive and manifest.

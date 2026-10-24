@@ -1,0 +1,13 @@
+{
+  "system": "MemoryShield+ track gateway",
+  "version": "v1.0.0",
+  "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
+  "files": {
+    ".gitignore": "76f1a620f213526ef75c6956dc41c57e22e38aae2404ea3189607fa889ca5ffc",
+    "README.md": "127b4272c31138554e2bff71d8b499fdbdc4d6db9d14be222f12f80a29bcf43e",
+    "gateway.py": "6db0dd91632afda0fe7c63ccf42b0bbd5f69b9a20d6b50bfd6e13a3341fb9a73",
+    "watcher.ps1": "1f192d84f632370e2ad3ffc78e4ea15a29f714827a241420756fa84f853710c0",
+    "test_gateway.py": "1e7d374975ab28c205fe63245d5d1a724bbd34754d4f71af5c22aaa488cc42c6",
+    "prepare_submission.py": "9c4fb916cfaa81d21cea5c1816531634c985879377cbf711ff23201efeacc1e4"
+  }
+}

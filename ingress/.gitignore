@@ -1,0 +1,6 @@
+*.log
+*.lock
+__pycache__/
+*.pyc
+submission-source.zip
+deployment.json
