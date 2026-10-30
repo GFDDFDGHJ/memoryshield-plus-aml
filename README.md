@@ -81,9 +81,16 @@ and leaves public-route ownership to ingress/watcher.ps1. Login Startup
 supervision requires that user to log in after a reboot; it is not a Windows
 service. Freeze code/models/mode throughout an evaluation.
 
-Suggested initial platform concurrency is Add=2 / Search=2, Top K=100.
-GPT admits two batches, waiting at most one second on overload, then returns
-retryable 503. Per-operation model timeout is 60 seconds; the extraction
+The [official Textual contract](https://agentmemories.ai/api/v1/evaluation-tracks/textual/contract),
+checked October 31, 2026, accepts Add concurrency ceilings of 16–64, Search
+ceilings of 16–256, and Top K of 1–100. The earlier 2/2 recommendation was
+incorrect for this range. Selecting 16/16 meets the minimum accepted ceilings;
+it is not evidence that this service can safely sustain a Full run. GPT admits
+two Add operations, waiting at most one second on overload, then returns
+retryable 503. Before Full, verify at least 16 independent new Adds, concurrent
+Search and long inputs with invented data. Existing duplicate-request tests
+and small public connectivity checks do not establish that capacity.
+Per-operation model timeout is 60 seconds; the extraction
 deadline is 180 seconds, checked before/after calls. Embedding timeout is
 45 seconds with no SDK retries; SQLite lock wait is 30 seconds. The unchanged
 legacy gateway has a 300-second I/O timeout; the new Funnel relay does not pass
