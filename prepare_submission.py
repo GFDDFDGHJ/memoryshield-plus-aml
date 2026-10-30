@@ -9,7 +9,9 @@ import zipfile
 FILES = (
     ".gitignore", "README.md", "LICENSE", "NOTICE.txt", "SUBMISSION.txt",
     "requirements.txt", "app.py", "config.py",
-    "store.py", "facts.py", "governance.py", "smoke_test.py", "test_facts.py",
+    "store.py", "add_memory.py", "add_index.py", "test_add_memory.py",
+    "test_add_index.py", "test_gpt_add_integration.py", "run_offline_tests.py",
+    "probe_gpt_add.py", "facts.py", "governance.py", "smoke_test.py", "test_facts.py",
     "test_store_regressions.py", "test_api_contract.py", "start.ps1",
     "test_fact_quality.py", "test_store_quality.py", "evaluate_quality.py",
     "test_context_facts.py", "test_prefix_retrieval.py", "evaluate_context_quality.py",
@@ -43,16 +45,16 @@ ROOT = Path(__file__).resolve().parent
 def main():
     payloads = {name: (ROOT / name).read_bytes() for name in FILES}
     manifest = {
-        "version": "v3.14.0",
+        "version": "v3.16.0",
         "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
-        "base_commit": "aed97db67b7dbd6d4d35678b4c0c609cf2050014",
+        "base_commit": "d63976daff1f8533c883a9ef25e5861a0ba709e3",
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in payloads.items()},
     }
     manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode()
     archive = ROOT / "submission-source.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for name, data in sorted({**payloads, "submission-manifest.json": manifest_bytes}.items()):
-            info = zipfile.ZipInfo(name, date_time=(2026, 10, 30, 0, 0, 0))
+            info = zipfile.ZipInfo(name, date_time=(2026, 10, 31, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             z.writestr(info, data)
     (ROOT / "submission-manifest.json").write_bytes(manifest_bytes)

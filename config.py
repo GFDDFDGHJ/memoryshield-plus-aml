@@ -47,10 +47,25 @@ class Config:
     embedding_dim: int = int(os.environ.get("EMBEDDING_DIM", "1024"))
     embedding_batch_size: int = int(os.environ.get("EMBEDDING_BATCH_SIZE", "10"))
     embedding_concurrency: int = int(os.environ.get("EMBEDDING_CONCURRENCY", "8"))
+    embedding_timeout: float = float(os.environ.get("EMBEDDING_TIMEOUT", "45"))
+
+    # --- Required Add memory extraction ---
+    # This candidate uses the official GPT-4o-mini endpoint. Search remains
+    # evidence retrieval. Credentials are never returned in health responses.
+    add_llm_api_key: str = os.environ.get(
+        "OPENAI_API_KEY", _read_secret("openai_api_key.txt")
+    )
+    add_llm_base_url: str = "https://api.openai.com/v1"
+    add_llm_model: str = "gpt-4o-mini"
+    add_llm_timeout: float = float(os.environ.get("AML_ADD_LLM_TIMEOUT", "60"))
+    add_llm_total_timeout: float = float(os.environ.get("AML_ADD_LLM_TOTAL_TIMEOUT", "180"))
+    add_llm_concurrency: int = int(os.environ.get("AML_ADD_LLM_CONCURRENCY", "2"))
+    add_llm_chunk_chars: int = int(os.environ.get("AML_ADD_LLM_CHUNK_CHARS", "12000"))
+    add_llm_max_output_tokens: int = int(os.environ.get("AML_ADD_LLM_MAX_OUTPUT_TOKENS", "2048"))
 
     # --- Storage ---
     db_path: str = os.environ.get(
-        "AML_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "aml_text_v4.db")
+        "AML_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "aml_text_gpt_v316.db")
     )
 
     # --- Retrieval ---
@@ -94,7 +109,7 @@ class Config:
     # --- Server ---
     host: str = os.environ.get("AML_HOST", "0.0.0.0")
     port: int = int(os.environ.get("AML_PORT", "8080"))
-    version: str = os.environ.get("AML_VERSION", "v3.14.0")
+    version: str = os.environ.get("AML_VERSION", "v3.16.0")
 
 
 CONFIG = Config()

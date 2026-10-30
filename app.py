@@ -22,6 +22,7 @@ from typing import Any
 from config import CONFIG
 from governance import maybe_govern_add
 from store import AddRequestConflict, MemoryStore
+from add_memory import AddMemoryError
 
 app = FastAPI(title="MemoryShield+ AML Submission", version=CONFIG.version)
 store = MemoryStore()
@@ -126,12 +127,16 @@ class SearchRequest(BaseModel):
 
 # ---------------------------------------------------------------- routes
 @app.get("/health")
-def health() -> dict:
-    return {"status": "ok", "version": CONFIG.version,
+def health() -> JSONResponse:
+    configured = bool(CONFIG.add_llm_api_key)
+    return JSONResponse({"status": "ok" if configured else "not-ready", "version": CONFIG.version,
             "embedding_model": CONFIG.embedding_model,
+            "add_model": CONFIG.add_llm_model,
+            "add_model_required": True,
+            "add_model_configured": bool(CONFIG.add_llm_api_key),
             "rerank_enabled": getattr(store, "_reranker", None) is not None,
             "rerank_model": CONFIG.rerank_model if CONFIG.rerank_enabled else None,
-            "ts": time.time()}
+            "ts": time.time()}, status_code=200 if configured else 503)
 
 
 @app.post("/add")
@@ -150,6 +155,10 @@ def add(
                                request_id=body.request_id)
     except AddRequestConflict:
         raise HTTPException(status_code=409, detail={"reason": "request_id_conflict"})
+    except AddMemoryError:
+        # Upstream bodies can contain source material: expose only a stable code.
+        raise HTTPException(status_code=503, detail={"reason": "add_memory_processing_failed"},
+                            headers={"Retry-After": "5"}) from None
     if CONFIG.governance_enabled:
         # seq of the last written message; governance demotes older topics.
         maybe_govern_add(store, body.user_id, 10**9, plain_messages)

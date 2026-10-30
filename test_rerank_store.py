@@ -13,6 +13,8 @@ from pathlib import Path
 import socket
 import sqlite3
 import tempfile
+import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -28,6 +30,7 @@ def _safe_open(file, *args, **kwargs):
 with patch.dict(os.environ, {"EMBEDDING_API_KEY": "offline", "DASHSCOPE_API_KEY": "offline", "AML_AUTH_TOKEN": "offline", "AML_RERANK": "false"}), \
      patch("builtins.open", _safe_open), patch.object(socket.socket, "connect", side_effect=AssertionError("No network")):
     import store as S
+from add_memory import ExtractionResult
 
 
 def row(rid, content, role="user", score=.9):
@@ -133,6 +136,9 @@ class RankingIntegrationTests(unittest.TestCase):
 class OfflineStore(S.MemoryStore):
     def __init__(self, client):
         self._dim, self.vectors, self.connections, self._reranker = 4, {}, [], client
+        self._add_locks = [threading.Lock() for _ in range(128)]
+        self._add_extractor = SimpleNamespace(extract=lambda messages:
+            ExtractionResult([], 1, 0, "gpt-4o-mini", 1))
         self._ensure_schema()
 
     def _connect(self):

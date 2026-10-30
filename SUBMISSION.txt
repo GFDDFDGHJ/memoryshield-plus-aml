@@ -1,102 +1,53 @@
-MemoryShield+ 文本赛道提交说明
+MemoryShield+ 文本候选版 v3.16.0
 
-系统：MemoryShield+ AML Textual Memory
-参评类型：文本记忆 / 开源方法组
-当前参评目标与文本源码版本：v3.14.0（对应此前已通过 Smoke 的文本版本）
+状态：候选源码，未部署、无本版本官方 Smoke、未启动 Full。
+线上仍为 v3.14.0；旧 Smoke 不适用于本次改动。
 仓库：https://github.com/GFDDFDGHJ/memoryshield-plus-aml
-固定源码提交：以配套 release-reference.txt 中的完整提交号和永久链接为准；
-该引用文件由发布后另行生成，不在同一提交内引用自己的提交号。
-历史项目基线：aed97db67b7dbd6d4d35678b4c0c609cf2050014
-文本 v3.14.0 算法来源：db43d67ea1728497ab7b5418a2fd9c62a5c29b71
+基线提交：d63976daff1f8533c883a9ef25e5861a0ba709e3
+候选固定提交号见配套 release-reference.txt（发布后生成）。
 
-一、方法说明（可复制到网页）
+方法：同步 Add 调用官方 gpt-4o-mini 选择原文记忆片段，校验原文引用、
+偏移、角色、用户和会话。全部原文、text-embedding-v4 向量、确定性事实、
+GPT 片段、用量与幂等写入凭据一起事务提交。失败返回 503，不静默跳过。
+已成功请求重放不再调用模型；同请求号不同内容/会话返回 409。
+Search 返回来源证据，不调用生成模型或生成最终答案。片段影响普通来源
+排序，当前/原始状态和时间顺序保留保护，隐私排除先于加权。
+Embedding：text-embedding-v4，standard，1024 维，每批最多十条。
+Reranker：可选 qwen3-rerank，有界调用，失败保留确定性排序回退。
 
-MemoryShield+ 是自行部署的同步 Add/Search 记忆系统。原始消息及其
-user_id、session、role、顺序和时间来源保存在 SQLite；使用
-text-embedding-v4 的 1024 维向量，在相同 user_id 内执行精确余弦检索，
-结合词项与原始消息证据召回，并可使用 qwen3-rerank 对有限候选重排。
-规则、事实、状态历史、表格声明与数值记录、跨片段显式引用及长历史摘要
-均按确定性方法提取或选择，返回带来源的证据；Search 不生成最终答案。
-长证据按范围和预算组织，保留原文、角色与出处，并标明遗漏或不完整。
-不同用户的记忆严格隔离，session 用于来源组织而非额外 Search 过滤。
-
-本次补齐许可证、归属声明与提交/部署说明，不改 v3.14.0 检索算法，
-不声明新的 Smoke 或 Full 分数。对应的历史 Smoke 分数 78.56 仅是该次冒烟
-结果，不能视为 Full 能力或正式公榜成绩。实际拟参评版本必须与官网同赛道
-已通过 Smoke 的版本、部署源码和配置一致，不能把另一版本算法改名为 v3.14.0。
-
-二、接口与鉴权（不包含密钥值）
-
+拟部署接口保持：
 Add：https://hlq5070.tail50f4d4.ts.net/add
 Search：https://hlq5070.tail50f4d4.ts.net/search
 Health：https://hlq5070.tail50f4d4.ts.net/health
-鉴权：沿用最初 v1 提交的原 Memory System Key，不更换其值；支持
-Authorization: Bearer <Memory System Key>、Token 或 X-Api-Key。
-实际密钥仅保存在私有配置及官网相应秘密字段，不放在此文档或公开源码中。
-Eval/Leaderboard Key 与 Memory System Key 用途不同，二者均不公开。
+沿用原 Memory System Key，不公开密钥。443 -> 8282 共享入口 -> 文本 8080，
+legacy_key_target=textual。代码赛道暂停、数据独立。候选库为
+aml_text_gpt_v316.db，此包不切换服务或迁移旧数据。
 
-固定公共入口由 Tailscale Funnel 443 转至本机共享 ingress 8282，
-本次文本评测要求 legacy_key_target=textual，再转到独立 Textual 8080。
-原 Key 每次只支持一个赛道；官网版本名、请求内容或 user_id 不改变本机模式。
-所有 Smoke/Full 均结束后才允许切换；HTTP 暂时空闲不足以证明评测结束。
-启动文本评测前检查 /__gateway_health 的有效配置、textual 目标、无待切换
-且活动请求为零。Full 受理后冻结版本、代码、模型配置与文本模式直到结束。
+建议初始并发 Add=2 / Search=2、Top K=100；这不是 Full 容量认证。
+GPT 并发 2，过载等待最多 1 秒后 503；模型操作超时 60 秒，整批提取
+截止 180 秒，调用前后校验。Embedding 超时 45 秒且无 SDK 重试；
+SQLite 锁等待 30 秒；入口 I/O 超时 300 秒。网络操作超时不等于严格
+墙钟取消，大输入/限流/失败会影响实际用时和费用。成功提交用量表不是
+完整账单；失败调用也可能计费。Windows 隐藏启动刷新用户/系统 Key，
+重启后依赖用户登录。完整 Full 容量与总费用尚未端到端验证。
 
-三、模型披露
+模拟真实 Add/Search 通过，重复写入幂等与用户隔离通过。
+两条模拟消息 385 输入 + 98 输出 token，按官方标准价格约 $0.00011655，
+不能据此外推 Full。官方模型价格：
+https://developers.openai.com/api/docs/models/gpt-4o-mini
 
-Embedding：Alibaba Cloud Model Studio/DashScope 的 text-embedding-v4，
-standard 模式，1024 维，每批最多十条文本。
-Reranker：qwen3-rerank；有限候选、有限并发、失败使用确定性排序回退。
-生成式 LLM：Add 和 Search 均为 0 次调用，不使用其他生成模型代替规定模型。
-平台负责统一 Answer/Eval。
+中文 Full 检查项明确 Add 需使用 gpt-4o-mini；旧 v3.14.0 的零 LLM 实现
+不满足该明确条件。v3.16.0 已接入实际处理，仍须同版本/赛道官方 Smoke。
+公开规则每赛道本届最多 30 次；无已确认的新版重置或继承旧 Smoke 规则。
+额度用尽需获得官方明确补测/准入处理，不能换版本名绕过或伪填已验证。
+本地验证和真实模型调用成功均不等于官方已接受参评。
 
-官网正文要求开源组使用 text-embedding-v4，LLM 相关组件使用 gpt-4o-mini，
-Reranker 不限；Full 勾选项另写 Add 预期使用 gpt-4o-mini。完全无生成式
-LLM 方法是否需额外调用该模型，官方 issue #19 仍未明确答复。因此如实
-披露本方法为 LLM-free，不将其写成已获官方认可或已确认完全满足资格。
+材料截止 2026-10-31 23:59（UTC+8）；评测停止 2026-11-04 23:59。
+Full 最多两次/Key/赛道，第二次在首次完成满 30 天后；失败优先原任务续跑。
+评测中冻结源码、模型和路由。联系人、邮箱、机构/独立开发者及实际主机
+容量与可用时段由本人核对，不代填虚构信息。
 
-四、容量与运行限制
-
-建议官网初始并发：max_add_concurrency=2，Search concurrency=2，Top K=100。
-2/2 是保守起步建议，不是服务器新增限流值、Full 吞吐保证或容量认证。
-完整 Full 数据规模下的存储、RAM、带宽、上游额度与持续性能尚未端到端实测。
-报名时应补充实际主机资源、可用时段、提供方额度及运行限制，避免把本地
-合成测试结果当作正式 Full 容量证据。
-
-当前源码默认 Embedding 并发 8、SQLite 锁等待 30 秒；重排最多 8 并发，
-网络操作超时 6 秒。共享入口 I/O 超时 300 秒，连接/写入/连接池等待为
-3/60/10 秒。Embedding SDK 超时未由应用显式设置。以上是配置说明，
-不保证每个 Full 请求都能在有效超时内完成。上游错误不应伪报 Add 成功。
-
-当前 Windows 主机通过用户登录后的 Startup 文件夹启动隐藏 watcher，
-不是计划任务；重启后依赖该用户登录。评测期间需保持主机供电、联网与
-可用。共享 gateway 要求单 worker；原文数据库与 Coding 存储保持独立。
-Textual 根源码包与 ingress 独立源码包/manifest 一并说明实际部署，
-公开仓库的固定提交包含两者。
-
-五、归属与许可证
-
-Git 历史中的项目作者为 GFDDFDGHJ；作者已确认有权为本项目作 MIT 授权。
-详见 LICENSE 与 NOTICE.txt。第三方依赖及模型/API 服务沿用各自许可和条款。
-相对历史基线的方法改动已列在 NOTICE.txt；本项目不宣称复现某篇
-MemoryShield/MemoryShield+ 论文，也不宣称与其作者存在关联。
-本文仅为文本参评材料；独立 Coding 实现与其复用说明见 coding/README.md。
-
-六、官网操作与期限
-
-材料提交截止：2026-10-31 23:59（UTC+8）。
-评测停止：2026-11-04 23:59（UTC+8）。
-Smoke 每赛道本届累计最多 30 次，不能用新版本名或切换模式绕过累计额度。
-Full 需要对应赛道和版本的 Smoke 通过，并满足官网前置检查。
-每个 AML Key、每赛道最多两次 Full；第二次要在首次 Full 完成满 30 天后。
-失败或中断时使用原任务的可用断点续跑，不用新建 Full 冒充恢复。
-正式 Full 未完成并通过复核前，不将 Smoke 成绩称为正式公榜结果。
-
-待本人补充的报名信息：联系人、联系邮箱、机构/团队或独立开发者身份、
-允许公开展示的信息、实际主机容量与可用时段。不得代填虚构姓名或机构。
-网站已存信息与最终固定版本、接口及材料应由本人核对。
-
-官方规则与操作以最新页面为准：
-https://agentmemories.ai/docs
+作者已确认有权 MIT 授权，见 LICENSE/NOTICE.txt；第三方沿用其许可。
+源码包不含评测数据、运行数据库或凭证。本次未读取官方原始评测样本调优。
+规则：https://agentmemories.ai/docs
 https://agentmemories.ai/competition/
-https://github.com/AML-memory/agent-memory-leaderboard/issues/19

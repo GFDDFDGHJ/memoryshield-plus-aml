@@ -17,6 +17,7 @@ from unittest.mock import Mock, patch
 from collections import Counter
 
 import store as store_module
+from add_memory import ExtractionResult
 
 
 DIM = 4
@@ -58,6 +59,11 @@ class OfflineMemoryStore(store_module.MemoryStore):
         self._dim = DIM
         self.vectors: dict[str, list[float]] = {}
         self.connections = []
+        self._add_locks = [threading.Lock() for _ in range(128)]
+        # These retrieval fixtures intentionally select no GPT spans. Real
+        # extractor processing and atomicity are covered in the GPT test suites.
+        self._add_extractor = SimpleNamespace(extract=lambda messages:
+            ExtractionResult([], 1, 0, "gpt-4o-mini", 1))
         self._ensure_schema()
 
     def _connect(self):

@@ -26,6 +26,7 @@ import math
 import os
 import re
 import sqlite3
+import threading
 import time
 import unicodedata
 from collections import Counter
@@ -43,6 +44,8 @@ import source_dependencies as dependency_layer
 from reranker import (RerankerClient, MAX_QUERY_BYTES, MAX_DOCUMENT_BYTES,
                       MAX_WEIGHTED_INPUT_BYTES)
 from config import CONFIG
+from add_memory import AddMemoryError, AddMemoryExtractor
+import add_index
 
 try:  # NumPy accelerates exact per-user scoring but is optional.
     import numpy as np
@@ -467,11 +470,19 @@ class AddRequestConflict(ValueError):
 
 
 class MemoryStore:
-    def __init__(self) -> None:
+    def __init__(self, *, add_extractor=None) -> None:
         self._client = OpenAI(
             base_url=CONFIG.embedding_base_url,
             api_key=CONFIG.embedding_api_key or "not-needed",
+            timeout=httpx.Timeout(CONFIG.embedding_timeout, connect=10),
+            max_retries=0,
+            http_client=httpx.Client(follow_redirects=False),
         )
+        self._add_extractor = (add_extractor if add_extractor is not None
+                               else AddMemoryExtractor(CONFIG))
+        # Fixed-size locks coalesce concurrent retries without retaining
+        # arbitrary request IDs. SQLite receipts also guard cross-process writes.
+        self._add_locks = [threading.Lock() for _ in range(128)]
         self._dim = CONFIG.embedding_dim
         self._headers = {
             "Authorization": f"Bearer {CONFIG.embedding_api_key}",
@@ -535,6 +546,7 @@ class MemoryStore:
                 f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(embedding float[{self._dim}])"
             )
             fact_layer.ensure_schema(conn)
+            add_index.ensure_schema(conn)
             conn.commit()
 
     # ------------------------------------------------------------- embed
@@ -614,6 +626,20 @@ class MemoryStore:
         request_id: str | None = None,
     ) -> int:
         """Persist a chunk once per user/request ID; return its original count."""
+        key = json.dumps([user_id, request_id], ensure_ascii=False).encode("utf-8")
+        stripe = int.from_bytes(hashlib.sha256(key).digest()[:2], "big") % len(self._add_locks)
+        lock = self._add_locks[stripe]
+        if not lock.acquire(timeout=1.0):
+            raise AddMemoryError("Add request is already processing")
+        try:
+            return self._add_messages(user_id, session_id, messages, request_id=request_id)
+        finally:
+            lock.release()
+
+    def _add_messages(
+        self, user_id: str, session_id: str, messages: list[dict],
+        *, request_id: str | None = None,
+    ) -> int:
         now_ms = time.time() * 1000.0
         contents = [m.get("content", "") for m in messages]
         contents = [c if isinstance(c, str) else _flatten_content(c) for c in contents]
@@ -628,6 +654,12 @@ class MemoryStore:
             if written is not None:
                 return written
         embeddings = self.embed(contents)
+        normalized_messages = [{**message, "content": contents[i]}
+                               for i, message in enumerate(messages)]
+        # Complete GPT processing before the write transaction. Its validated
+        # source spans and usage commit atomically with the raw records/receipt;
+        # an upstream error cannot acknowledge a partially processed Add.
+        extraction = self._add_extractor.extract(normalized_messages)
 
         with self._connect() as conn:
             # Serialize sequence allocation and the idempotency check with the
@@ -641,6 +673,7 @@ class MemoryStore:
                 "SELECT COALESCE(MAX(seq), 0) + 1 FROM items WHERE user_id=?",
                 (user_id,),
             ).fetchone()[0]
+            source_rids = []
             for i, (msg, emb) in enumerate(zip(messages, embeddings)):
                 provided_timestamp = msg.get("timestamp") is not None
                 ts = msg["timestamp"] if provided_timestamp else now_ms
@@ -654,6 +687,7 @@ class MemoryStore:
                     (user_id, session_id, role, content, created_at, timestamp_origin, seq + i),
                 )
                 rid = cur.lastrowid
+                source_rids.append(rid)
                 conn.execute(
                     "INSERT INTO vec_items(rowid, embedding) VALUES(?, ?)",
                     (rid, _pack(emb)),
@@ -664,6 +698,8 @@ class MemoryStore:
                 )
             # Aggregate view of the session, rebuilt from its messages.
             fact_layer.update_digest(conn, user_id, session_id)
+            add_index.store_extraction(conn, user_id, session_id, source_rids,
+                                       normalized_messages, extraction, request_id=request_id or None)
             if request_id:
                 conn.execute(
                     "INSERT INTO add_requests(user_id,request_id,session_id,payload_hash,written)"
@@ -1125,7 +1161,15 @@ class MemoryStore:
         excluded = set(exclude_source_rids or ())
         if _LINK_REFERENCE.search(query):
             excluded.update(link_layer.conflicting_source_ids(rows, query))
-        ranked = [(float(sim), row) for row, sim in zip(rows, sims)
+        # GPT selects literal source spans during Add. Query overlap with those
+        # spans supplies a small relevance boost only inside the already filtered
+        # source pool; the returned wording/provenance stays original.
+        protected_intent = (_current_query(query) or _original_state_query(query)
+                            or _chronology_query(query))
+        boosts = {} if protected_intent else add_index.rank_source_boosts(
+            conn, user_id, query, [row["rid"] for row in rows if row["rid"] not in excluded]
+        )
+        ranked = [(float(sim) + boosts.get(row["rid"], 0.0), row) for row, sim in zip(rows, sims)
                   if row["rid"] not in excluded]
         ranked.sort(key=lambda pair: pair[0], reverse=True)
 

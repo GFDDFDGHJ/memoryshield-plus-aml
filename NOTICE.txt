@@ -20,10 +20,13 @@ current model configuration.
 
 The Textual v3.14.0 algorithm source is:
   db43d67ea1728497ab7b5418a2fd9c62a5c29b71
-The final publication revision is recorded separately in the release packet's
+This v3.16.0 candidate is based on publication
+d63976daff1f8533c883a9ef25e5861a0ba709e3. It adds official GPT-4o-mini
+source-span selection during Add, transactional span/usage storage, bounded
+source ranking and independent synthetic tests. It needs its own official Smoke.
+The final candidate publication revision is recorded separately in the release packet's
 release-reference.txt after publication; it must match the submitted service.
-Licensing, source disclosures and submission-document corrections do not
-represent a new retrieval method or a new evaluation result.
+This is a changed implementation; no new official evaluation result is claimed.
 
 Relative to the original baseline, this Textual implementation changes:
 - embeddings to standard text-embedding-v4, 1024 dimensions;
@@ -63,8 +66,9 @@ requirements remain applicable:
 
 Pinned direct Python package versions are in requirements.txt. No vendored
 copy of those dependency projects is included in the Textual source ZIP.
-The OpenAI SDK is used for the compatible embedding API; its presence does
-not mean this method invokes a generative OpenAI model.
+The OpenAI SDK is used for compatible embeddings and official gpt-4o-mini
+source-span selection during Add. OpenAI service terms and usage charges
+are independent of this source license.
 
 Alibaba Cloud Model Studio/DashScope provides text-embedding-v4 and the
 optional qwen3-rerank service. Provider terms, API access, usage charges and
@@ -77,9 +81,10 @@ its reuse of the Textual bounded reranker client in coding/README.md.
 The ingress directory contains the shared transport and its own source
 manifest; include that material when describing the deployed public API.
 
-Add and Search make no generative LLM calls and return stored evidence, not
-generated final answers. The LLM-free eligibility question remains pending
-official clarification; no eligibility approval is claimed here.
+Add invokes official gpt-4o-mini for actual source-span memory processing.
+Search returns stored evidence without generative calls or final answers.
+The Chinese Full checklist requires gpt-4o-mini during Add. This candidate
+has no matching passed official Smoke and no admission approval is claimed.
 Official requirements: https://agentmemories.ai/docs
 Model-scope discussion: https://github.com/AML-memory/agent-memory-leaderboard/issues/19
 

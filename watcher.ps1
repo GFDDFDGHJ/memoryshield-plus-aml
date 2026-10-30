@@ -1,16 +1,14 @@
 # AML service supervisor.
 #
-# Why this exists: uvicorn started from an interactive/sandboxed shell is killed
-# as soon as that shell's job object is torn down, so the API silently dies and
-# the leaderboard's Add/Search calls start failing. This script is meant to be
-# launched by the Windows Task Scheduler (task name: AML-MemoryServer), which
-# keeps it outside any interactive session.
+# Launch hidden from a persistent user session. This deployment uses a Startup
+# VBS after user login, not an installed Scheduled Task or a Windows service.
+# The separate ingress supervisor owns the shared public 443 route.
 #
 # It loops forever and:
 #   1) probes http://127.0.0.1:8080/health, restarting uvicorn if it is down
 #      (HTTP probe, not Get-NetTCPConnection: the latter is unavailable in some
 #      sandboxed contexts and silently returns nothing)
-#   2) supervises this project's Cloudflare tunnel and existing Tailscale Funnel
+#   2) observes Tailscale availability; ingress supervises the Funnel mapping
 #   3) checks the fixed HTTPS hostname via public DNS every 120 seconds without
 #      treating a public ingress failure as a reason to kill a healthy API
 #
@@ -18,12 +16,12 @@
 
 $dir = [IO.Path]::GetFullPath($PSScriptRoot)
 Set-Location $dir
-$expectedVersion = 'v3.14.0'
+$expectedVersion = 'v3.16.0'
 $expectedModel = 'text-embedding-v4'
 
 function Update-DashScopeEnvironment {
     # Read persisted values before every child launch, even in a long-lived watcher.
-    foreach ($name in @('DASHSCOPE_API_KEY')) {
+    foreach ($name in @('DASHSCOPE_API_KEY', 'OPENAI_API_KEY')) {
         $value = [Environment]::GetEnvironmentVariable($name, 'User')
         if ([string]::IsNullOrWhiteSpace($value)) {
             $value = [Environment]::GetEnvironmentVariable($name, 'Machine')
@@ -42,8 +40,14 @@ function Update-DashScopeEnvironment {
     $env:EMBEDDING_MODEL = $expectedModel
     $env:EMBEDDING_MODE = 'standard'
     $env:EMBEDDING_DIM = '1024'
-    $env:AML_DB_PATH = Join-Path $dir 'aml_text_v4.db'
+    $env:AML_DB_PATH = Join-Path $dir 'aml_text_gpt_v316.db'
     $env:AML_VERSION = $expectedVersion
+    $env:AML_ADD_LLM_CONCURRENCY = '2'
+    $env:AML_ADD_LLM_TIMEOUT = '60'
+    $env:AML_ADD_LLM_TOTAL_TIMEOUT = '180'
+    $env:AML_ADD_LLM_CHUNK_CHARS = '12000'
+    $env:AML_ADD_LLM_MAX_OUTPUT_TOKENS = '2048'
+    $env:EMBEDDING_TIMEOUT = '45'
     $env:AML_RERANK = 'true'
     $env:AML_RERANK_API_KEY = $env:EMBEDDING_API_KEY
     $env:AML_RERANK_BASE_URL = 'https://dashscope.aliyuncs.com/api/v1'
@@ -74,7 +78,9 @@ function Test-Health {
         $r = Invoke-WebRequest "http://127.0.0.1:8080/health" -TimeoutSec 5 -UseBasicParsing
         $body = $r.Content | ConvertFrom-Json -ErrorAction Stop
         return ($r.StatusCode -eq 200 -and $body.status -eq 'ok' -and
-            $body.version -eq $expectedVersion -and $body.embedding_model -eq $expectedModel)
+            $body.version -eq $expectedVersion -and $body.embedding_model -eq $expectedModel -and
+            $body.add_model -eq 'gpt-4o-mini' -and $body.add_model_required -eq $true -and
+            $body.add_model_configured -eq $true)
     } catch {
         return $false
     }
@@ -248,7 +254,9 @@ function Test-StartupConfiguration {
     $check = @'
 import sys, fastapi, httpx, openai, sqlite_vec, uvicorn
 from config import CONFIG
-assert CONFIG.embedding_api_key and CONFIG.auth_token
+assert CONFIG.embedding_api_key and CONFIG.auth_token and CONFIG.add_llm_api_key
+assert CONFIG.add_llm_model == 'gpt-4o-mini'
+assert CONFIG.add_llm_base_url == 'https://api.openai.com/v1'
 assert CONFIG.embedding_model == 'text-embedding-v4'
 assert CONFIG.embedding_mode == 'standard' and CONFIG.embedding_dim == 1024
 assert CONFIG.embedding_base_url == 'https://dashscope.aliyuncs.com/compatible-mode/v1'
@@ -312,7 +320,6 @@ if (-not (Test-StartupConfiguration)) {
 }
 Write-Log "watcher started (python=$py, pid=$PID, version=$expectedVersion, model=$expectedModel)"
 $healthFails = 0
-if (-not (Test-Cloudflared)) { Write-Log "cloudflared not running, starting"; Start-Cloudflared } else { Update-CloudflaredUrl }
 
 while ($true) {
     try {
@@ -337,7 +344,7 @@ while ($true) {
                     Write-Log 'startup configuration check failed; uvicorn was not started'
                 } else {
                     Write-Log 'starting uvicorn'
-                    $uvicornArguments = '-m uvicorn app:app --app-dir "' + $dir + '" --host 0.0.0.0 --port 8080'
+                    $uvicornArguments = '-m uvicorn app:app --app-dir "' + $dir + '" --host 0.0.0.0 --port 8080 --workers 1'
                     Start-Process -FilePath $py `
                         -ArgumentList $uvicornArguments `
                         -WorkingDirectory $dir `
@@ -349,14 +356,6 @@ while ($true) {
                     else { Write-Log 'uvicorn still unhealthy after start' }
                 }
             }
-        }
-
-        if (-not (Test-Cloudflared)) {
-            Write-Log "cloudflared down, restarting"
-            Start-Cloudflared
-        } else {
-            # A quick-tunnel URL can arrive after the initial startup wait.
-            Update-CloudflaredUrl
         }
 
         if (Test-Path $ts) {
@@ -379,15 +378,8 @@ while ($true) {
                     }
                 }
             }
-            if ($LASTEXITCODE -eq 0 -and $funnel -notmatch "Funnel on") {
-                $en = & $ts funnel --bg --yes 8080 2>&1 | Out-String
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Log "funnel re-enabled"
-                    $script:funnelWarned = $false
-                } else {
-                    Write-Log "funnel enable failed: $($en.Trim())"
-                }
-            }
+            # ingress/watcher.ps1 reconciles 443 -> 8282. Do not restore the
+            # historical direct-8080 mapping and bypass track routing.
         }
 
         # Observational keepalive only: local health above remains the sole

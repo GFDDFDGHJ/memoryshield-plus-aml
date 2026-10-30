@@ -22,6 +22,8 @@ import re
 import socket
 import sys
 import tempfile
+import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -47,6 +49,7 @@ with patch("builtins.open", _offline_open), \
      patch("socket.create_connection", side_effect=AssertionError("No network")), \
      patch.object(socket.socket, "connect", side_effect=AssertionError("No network")):
     import store
+from add_memory import ExtractionResult
 
 for _name in ("store", "facts", "config"):
     if Path(sys.modules[_name].__file__).resolve().parent != SOURCE_ROOT:
@@ -58,6 +61,9 @@ class OfflineStore(store.MemoryStore):
         self._dim = 4
         self.vectors = {}
         self.connections = []
+        self._add_locks = [threading.Lock() for _ in range(128)]
+        self._add_extractor = SimpleNamespace(extract=lambda messages:
+            ExtractionResult([], 1, 0, "gpt-4o-mini", 1))
         self._ensure_schema()
 
     def _connect(self):

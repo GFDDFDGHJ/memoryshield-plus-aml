@@ -255,6 +255,12 @@ class PrivacyBoundaryIntegrationTests(unittest.TestCase):
 
                 class Offline(S.MemoryStore):
                     def __init__(self):
+                        import threading
+                        from types import SimpleNamespace
+                        from add_memory import ExtractionResult
+                        self._add_locks = [threading.Lock() for _ in range(128)]
+                        self._add_extractor = SimpleNamespace(extract=lambda messages:
+                            ExtractionResult([], 1, 0, "gpt-4o-mini", 1))
                         self._dim = 4
                         self.connections = []
                         self._ensure_schema()
