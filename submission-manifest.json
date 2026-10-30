@@ -3,11 +3,11 @@
   "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
   "base_commit": "d63976daff1f8533c883a9ef25e5861a0ba709e3",
   "files": {
-    ".gitignore": "4badc3591acc13a5e0c555349355bc6abf10d3c13411c39ba7033a0ca1dd44ff",
-    "README.md": "2293066a0772bab5d662190f78dd3d8350f28b6da5ab3a1750bbc053de3a2f32",
+    ".gitignore": "f940a65a066bf53fd4de5d349f9ae164b65aba00e9de804baf47341ce804c3fd",
+    "README.md": "f8a2bb813c140568b6912f1449113ba30e8f1f9b6bd9a5942a75f1017d244fb7",
     "LICENSE": "5978e22231ed712444aa74bf9c8a505683813c3a9556896e46608f151d3dc81d",
     "NOTICE.txt": "4edb9fd3532ecc3cdb2cf2674884e56cc9c728e1dcd961ab64fc106b955387fb",
-    "SUBMISSION.txt": "96ced2151e877ca34638b14e479108d4552958432d5546b27011d61d1a622a8d",
+    "SUBMISSION.txt": "acbd030a82dbebc08accaf21486100135aef3e02ed097692ee1b51a99f424b20",
     "requirements.txt": "2a4f6b3916178d9223d2268046697764c2bf01ebc4594fbb2660693628b30ebd",
     "app.py": "547956976d8d865b1ba1bc87d70510fd67c55d60c8d9dac37abc41692f437fa4",
     "config.py": "7c970bdf49e7b531ecc6fd79e655b9990c50ca22c99cbe8f57b2dac10395cdb4",
@@ -81,6 +81,8 @@
     "evaluate_global_priority_controls.py": "a37b901eec3ee8a4cd5afd19cdb016e7fb69d8057c6cacf03d35d2095ff51377",
     "watcher.ps1": "6a76ce195786c11dff1d5acaf9d5ba16417e2b016c61bfafdc6f78935cb16e1e",
     "run-watcher.cmd": "38ad6fc1364ef01e475678d5a996389d83454b4b166b993b964471116ac11f36",
-    "prepare_submission.py": "aeff61c321c9e862ea0431d16aec1124e2d1dde4ab7bcc716b579c61410be783"
+    "ops/watch-isolated-textual.ps1": "7eac855ff90c36018eb2d8755e58f57e910be6b5d55301affe704faf62ac8090",
+    "ops/configure-hlq1-ingress.ps1": "8f9c36bf264b4448f6d5e800558c4f52fbead26bc80e6e540919e4da3ef19fb4",
+    "prepare_submission.py": "d9a4e83cacae405c83fa3f4eedb0eea5c1c384fb6ba9e3689551e55f59ed14ec"
   }
 }

@@ -1,7 +1,8 @@
 # MemoryShield+ — Textual candidate v3.16.0
 
-**Candidate only: not deployed, no matching official Smoke, no Full started.**
-The existing service remains v3.14.0. Its passed Smoke does not qualify this
+**Candidate only: isolated backend installed; public hlq-1 relay setup pending;
+no matching official Smoke, no Full started.**
+The existing hlq5070 service remains v3.14.0. Its passed Smoke does not qualify this
 changed implementation. The Chinese Full checklist explicitly requires
 gpt-4o-mini during Add; the old LLM-free service does not meet that condition.
 
@@ -46,11 +47,21 @@ old Textual and Coding stores are neither migrated nor deleted.
 
 Intended endpoints and original Memory System Key remain unchanged:
 
-- https://hlq5070.tail50f4d4.ts.net/add
-- https://hlq5070.tail50f4d4.ts.net/search
-- https://hlq5070.tail50f4d4.ts.net/health
+- https://hlq-1.tail50f4d4.ts.net/add
+- https://hlq-1.tail50f4d4.ts.net/search
+- https://hlq-1.tail50f4d4.ts.net/health
 
-Shared ingress 443 -> loopback 8282 -> Textual 8080 uses
+The new entry is a separate relay: hlq-1 Funnel 443 -> its loopback 8380
+portproxy -> WireGuard tailnet -> hlq5070 100.93.38.9:8380, bound only on the
+Tailscale interface. ops/configure-hlq1-ingress.ps1 runs on the owning hlq-1
+Windows node with Administrator PowerShell, backs up scoped configuration,
+refuses conflicting routes and supports -Rollback. It never reads API keys.
+ops/watch-isolated-textual.ps1 supervises the independent backend hidden with
+persisted provider keys and the original Memory System Key. Its runtime is
+deployments/textual-v3.16.0 with its own database and logs. Keep both machines
+online and awake. Public Add/Search verification remains pending relay setup.
+
+The unchanged legacy entry hlq5070 uses shared ingress 443 -> loopback 8282 -> Textual 8080 with
 legacy_key_target=textual. Coding remains paused with separate storage.
 A website version or payload cannot switch this local mode. Use one API
 worker and one gateway worker. Candidate watcher is a deployment template:

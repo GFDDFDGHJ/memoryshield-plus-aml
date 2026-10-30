@@ -1,7 +1,8 @@
 MemoryShield+ 文本候选版 v3.16.0
 
-状态：候选源码，未部署、无本版本官方 Smoke、未启动 Full。
-线上仍为 v3.14.0；旧 Smoke 不适用于本次改动。
+状态：独立后端已安装；hlq-1 公网入口待另一台电脑运行配置脚本。
+本版本无官方 Smoke，未启动 Full；原 hlq5070 线上仍为 v3.14.0。
+旧 Smoke 不适用于本次改动。
 仓库：https://github.com/GFDDFDGHJ/memoryshield-plus-aml
 基线提交：d63976daff1f8533c883a9ef25e5861a0ba709e3
 候选固定提交号见配套 release-reference.txt（发布后生成）。
@@ -16,12 +17,18 @@ Embedding：text-embedding-v4，standard，1024 维，每批最多十条。
 Reranker：可选 qwen3-rerank，有界调用，失败保留确定性排序回退。
 
 拟部署接口保持：
-Add：https://hlq5070.tail50f4d4.ts.net/add
-Search：https://hlq5070.tail50f4d4.ts.net/search
-Health：https://hlq5070.tail50f4d4.ts.net/health
-沿用原 Memory System Key，不公开密钥。443 -> 8282 共享入口 -> 文本 8080，
-legacy_key_target=textual。代码赛道暂停、数据独立。候选库为
-aml_text_gpt_v316.db，此包不切换服务或迁移旧数据。
+Add：https://hlq-1.tail50f4d4.ts.net/add
+Search：https://hlq-1.tail50f4d4.ts.net/search
+Health：https://hlq-1.tail50f4d4.ts.net/health
+沿用原 Memory System Key，不公开密钥。新入口 hlq-1 Funnel 443 ->
+该机 loopback 8380 -> WireGuard 尾网 -> 当前机 100.93.38.9:8380。
+ops/configure-hlq1-ingress.ps1 在 hlq-1 的管理员 PowerShell 中配置，
+拒绝覆盖冲突路由，先备份并支持 -Rollback；不读取 Key。
+当前机 ops/watch-isolated-textual.ps1 隐藏守护独立运行目录
+deployments/textual-v3.16.0，候选库 aml_text_gpt_v316.db、日志均独立。
+两台电脑均需联网且不休眠。新公网 Add/Search 待入口配置后复验。
+原 hlq5070 443 -> 8282 -> 文本 8080，legacy_key_target=textual 不变。
+代码赛道暂停、数据独立；旧文本数据不迁移、不改动。
 
 建议初始并发 Add=2 / Search=2、Top K=100；这不是 Full 容量认证。
 GPT 并发 2，过载等待最多 1 秒后 503；模型操作超时 60 秒，整批提取
@@ -38,8 +45,9 @@ https://developers.openai.com/api/docs/models/gpt-4o-mini
 
 中文 Full 检查项明确 Add 需使用 gpt-4o-mini；旧 v3.14.0 的零 LLM 实现
 不满足该明确条件。v3.16.0 已接入实际处理，仍须同版本/赛道官方 Smoke。
-公开规则每赛道本届最多 30 次；无已确认的新版重置或继承旧 Smoke 规则。
-额度用尽需获得官方明确补测/准入处理，不能换版本名绕过或伪填已验证。
+公开规则每赛道本届最多 30 次，但未明确说明同系统多 Key 是否合并计数。
+用户另有已申请的 Key；以其实际版本/赛道资格为准，不宣称换地址/Key 会
+自动获准额外配额，也不继承旧 Smoke；规则范围有疑问需向主办方核对。
 本地验证和真实模型调用成功均不等于官方已接受参评。
 
 材料截止 2026-10-31 23:59（UTC+8）；评测停止 2026-11-04 23:59。

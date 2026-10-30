@@ -27,6 +27,10 @@ tmp/
 requests.jsonl
 cf-url.txt
 watcher.lock
+isolated-textual-watcher.lock
+.hlq1-ingress-state.json
+.hlq1-ingress.lock
+hlq1-ingress-backups/
 cloudflared.exe
 submission-source/
 submission-source.zip
