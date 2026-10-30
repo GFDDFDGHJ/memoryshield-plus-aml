@@ -1,18 +1,19 @@
 {
   "system": "MemoryShield+ track gateway",
-  "version": "v1.1.0",
+  "version": "v1.1.1",
   "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
   "files": {
-    ".gitignore": "92278d12f5bd7c12df6a5c95555697810db75de5c64572b2189ad9567eb03ab0",
-    "README.md": "1a636ff59bc987e41eedd6e1b2ea590d48445733c3ad06c2f3e4fd23b3ef0912",
-    "gateway.py": "a386ac1d77d9f5bcc11b8e2c7f5bda854c00179101fe2268323fad6b9378dad5",
-    "watcher.ps1": "2b04cb1c2481cd9cd24a7d653de467466dc98a37ee5faeb4ba2d6ccdab02456f",
+    ".gitignore": "d32ee83032074f01412ccc2f0e102ed9f46ca0d12b3ceff8707b4a6dc407c3c2",
+    "README.md": "7b4c5c1d11262b564dc607b0f862933a26662f168d1da58ded7b7b9d86432045",
+    "gateway.py": "698f211bcb4287025d0f36505b0111aaf2e20a6a3dc4352e39c68ff63869b141",
+    "watcher.ps1": "bacf44811d2c4442b309235df2b6c2552901d38049a6b45a726fdbd31317b0ea",
     "test_gateway.py": "f1b778a5664a22432b4411ec82760c05def08ea3e9229ce99f0b191143f3698f",
-    "prepare_submission.py": "563e45a0e4907e9c3839331640d62da98a63d6ceacc7c041a045dca39eb37e6e",
+    "prepare_submission.py": "1f03d7ec9e973945c7167f87ccfae2df4a7bbc08ab746519026d0932864c0daf",
     "legacy_mode.py": "94c76a6df89790aa17558bf01830d11991d4847790a6248bcec4a79a97dc7f5e",
     "test_legacy_mode.py": "bf9051bc957db0031cae8c895a4fa9a1d8a5d47e5ea319421ffa677c7623efcd",
-    "set_legacy_target.py": "65f4218b8877f4200027f3f337f4fe720fe51dc820adbc57c52b01a4e7a0eb82",
-    "test_set_legacy_target.py": "87816e83ede03fa1002f12d13acde41d998adae24d7820c0c2c0565df78e1dac",
-    "test_local_target.py": "88de8f004e5c0aee62a1e11005c728a4c4afdf9b8fc71c5234aff58183ef5a1a"
+    "set_legacy_target.py": "e035dd3f9bab3c52e389c0046c9c514abe9b371f87e43dee8fe1531e279c9169",
+    "test_set_legacy_target.py": "29c7e0b1314f9cd55d4f00312a8db4f286ec870978a9a11f8a3dec14af9d1a65",
+    "test_local_target.py": "88de8f004e5c0aee62a1e11005c728a4c4afdf9b8fc71c5234aff58183ef5a1a",
+    "test_selector.py": "06119754b0f8b94979bbe9a306c46d6e4fc5239980278dd69c31d1be455ef872"
   }
 }

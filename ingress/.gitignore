@@ -7,3 +7,6 @@ deployment.json
 legacy_target.json
 legacy_target.switch.lock
 .legacy-target-*.tmp
+textual_backend.json
+backend-deployment.json
+backend-switch-backups/

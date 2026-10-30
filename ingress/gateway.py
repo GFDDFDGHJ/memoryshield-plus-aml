@@ -18,6 +18,34 @@ except ImportError:
     from legacy_mode import LegacyModeController, LegacyModeBusy, LegacyModeUnavailable
 
 ROOT=Path(__file__).resolve().parent
+GATEWAY_VERSION='v1.1.1'
+TEXTUAL_BACKENDS={
+    'legacy_v3140':('http://127.0.0.1:8080','v3.14.0'),
+    'gpt_v3160':('http://100.93.38.9:8380','v3.16.0'),
+}
+
+
+def load_textual_backend(path=None):
+    """Read a startup-only named release; never accept a caller-supplied URL."""
+    target=ROOT/'textual_backend.json' if path is None else Path(path)
+    try:
+        with target.open('rb') as stream:raw=stream.read(4097)
+    except FileNotFoundError:
+        return 'legacy_v3140'
+    if len(raw)>4096:raise ValueError('Invalid local textual backend')
+    def unique_object(pairs):
+        result={}
+        for key,value in pairs:
+            if key in result:raise ValueError('Invalid local textual backend')
+            result[key]=value
+        return result
+    try:value=json.loads(raw.decode('utf-8'),object_pairs_hook=unique_object)
+    except (ValueError,UnicodeError):raise ValueError('Invalid local textual backend') from None
+    if (not isinstance(value,dict) or set(value)!={'textual_backend'} or
+            not isinstance(value['textual_backend'],str) or
+            value['textual_backend'] not in TEXTUAL_BACKENDS):
+        raise ValueError('Invalid local textual backend')
+    return value['textual_backend']
 
 
 def load_legacy_target(path=None):
@@ -38,6 +66,7 @@ class GatewaySettings:
     text_url: str = 'http://127.0.0.1:8080'
     coding_url: str = 'http://127.0.0.1:8181'
     legacy_key_target: str = 'textual'
+    textual_backend: str = 'legacy_v3140'
 
     def __post_init__(self):
         if not self.text_token or not self.coding_token or self.text_token==self.coding_token:
@@ -46,13 +75,24 @@ class GatewaySettings:
             raise ValueError('Only fixed loopback backends are permitted')
         if self.legacy_key_target not in {'textual','coding'}:
             raise ValueError('Invalid local legacy mode')
+        if not isinstance(self.textual_backend,str) or self.textual_backend not in TEXTUAL_BACKENDS:
+            raise ValueError('Invalid local textual backend')
+
+    @property
+    def selected_text_url(self):
+        return TEXTUAL_BACKENDS[self.textual_backend][0]
+
+    @property
+    def selected_text_version(self):
+        return TEXTUAL_BACKENDS[self.textual_backend][1]
 
 
 def load_settings():
     root=Path(__file__).resolve().parents[1]
     return GatewaySettings(
         text_token=(root/'.secrets/aml_auth_token.txt').read_text(encoding='utf-8').strip(),
-        coding_token=(root/'coding/.secrets/auth_token.txt').read_text(encoding='utf-8').strip())
+        coding_token=(root/'coding/.secrets/auth_token.txt').read_text(encoding='utf-8').strip(),
+        textual_backend=load_textual_backend())
 
 
 def create_app(settings=None, *, transport=None, mode_controller=None):
@@ -71,7 +111,7 @@ def create_app(settings=None, *, transport=None, mode_controller=None):
             api.state.upstream=client
             yield
 
-    api=FastAPI(title='MemoryShield+ track gateway',version='v1.1.0',lifespan=lifespan,
+    api=FastAPI(title='MemoryShield+ track gateway',version=GATEWAY_VERSION,lifespan=lifespan,
                 docs_url=None,redoc_url=None,openapi_url=None)
 
     def principal(request, *, public_health=False):
@@ -112,7 +152,7 @@ def create_app(settings=None, *, transport=None, mode_controller=None):
                         track=state['legacy_key_target']
                     else:track=selected
                 config=api.state.settings
-                base,token=(config.coding_url,config.coding_token) if track=='coding' else (config.text_url,config.text_token)
+                base,token=(config.coding_url,config.coding_token) if track=='coding' else (config.selected_text_url,config.text_token)
                 headers={'Authorization':'Bearer '+token,'Accept':'application/json'}
                 if request.headers.get('content-type'):
                     headers['Content-Type']=request.headers['content-type']
@@ -139,7 +179,9 @@ def create_app(settings=None, *, transport=None, mode_controller=None):
 
     @api.get('/__gateway_health')
     async def gateway_health():
-        return {'status':'ok','system':'MemoryShield+ track gateway','version':'v1.1.0',
+        config=api.state.settings
+        return {'status':'ok','system':'MemoryShield+ track gateway','version':GATEWAY_VERSION,
+                'textual_backend':config.textual_backend,'textual_version':config.selected_text_version,
                 'active_memory_requests':api.state.active_memory_requests,**api.state.legacy_mode.status()}
 
     @api.get('/health')

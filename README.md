@@ -5,10 +5,13 @@ Use `ops/run-portable.ps1` for that installation: localhost port 18080,
 an independent `data/` database, private credentials and pinned Textual models.
 The historical deployment scripts below target the existing machines.
 
-**Candidate v3.16.0 is deployed at hlq-1; independent public health and invented
-Add/Search checks passed. No matching official Smoke or Full has been run.**
-The existing hlq5070 service remains v3.14.0. Its passed Smoke does not qualify this
-changed implementation. The Chinese Full checklist explicitly requires
+**Candidate v3.16.0 is deployed at the original hlq5070 URL and at hlq-1.
+Independent public health and invented Add/Search checks verify connectivity;
+no matching official Smoke or Full has been run.**
+The original v3.14.0 backend remains on local port 8080 for rollback, while
+gateway v1.1.1 routes the original public URL to the separate GPT backend.
+Its historical Smoke does not qualify this changed implementation.
+The Chinese Full checklist explicitly requires
 gpt-4o-mini during Add; the old LLM-free service does not meet that condition.
 
 ## Method
@@ -50,13 +53,24 @@ Missing GPT credentials make health return 503/not-ready. Health does not
 call the model or verify quota. The new database is **aml_text_gpt_v316.db**;
 old Textual and Coding stores are neither migrated nor deleted.
 
-Intended endpoints and original Memory System Key remain unchanged:
+The website-bound endpoints and original Memory System Key remain unchanged:
 
-- https://hlq-1.tail50f4d4.ts.net/add
-- https://hlq-1.tail50f4d4.ts.net/search
-- https://hlq-1.tail50f4d4.ts.net/health
+- https://hlq5070.tail50f4d4.ts.net/add
+- https://hlq5070.tail50f4d4.ts.net/search
+- https://hlq5070.tail50f4d4.ts.net/health
 
-The new entry is a separate relay: hlq-1 Funnel 443 -> its loopback 8380
+Gateway v1.1.1 on loopback 8282 uses the local startup-only selector
+`{"textual_backend":"gpt_v3160"}` to reach the fixed GPT backend at
+100.93.38.9:8380. Only two named, fixed destinations are accepted; callers
+cannot select a version or URL. Invalid configuration prevents startup, and
+upstream failure never falls back to the old Textual or Coding store.
+The existing legacy-key mode remains `textual`, with Coding credentials and
+storage isolated. The original Key is forwarded unchanged to the GPT backend.
+Gateway source, tests and rollback instructions are in `ingress/` in the
+fixed GitHub revision. The portable Textual ZIP does not need this existing
+machine's shared gateway; its launcher provides a standalone local service.
+
+The additional hlq-1 entry is a separate relay: hlq-1 Funnel 443 -> its loopback 8380
 portproxy -> WireGuard tailnet -> hlq5070 100.93.38.9:8380, bound only on the
 Tailscale interface. ops/configure-hlq1-ingress.ps1 runs on the owning hlq-1
 Windows node with Administrator PowerShell, backs up scoped configuration,
@@ -72,8 +86,9 @@ Top K and user isolation passed on both currently published Funnel IPv4
 addresses on October 31, 2026. Independent SG/CN/US health probes also passed
 with valid TLS. These connectivity checks are not official Smoke results.
 
-The unchanged legacy entry hlq5070 uses shared ingress 443 -> loopback 8282 -> Textual 8080 with
-legacy_key_target=textual. Coding remains paused with separate storage.
+The original hlq5070 entry now uses shared ingress 443 -> loopback 8282 ->
+the separate GPT Textual backend on 8380, with legacy_key_target=textual.
+The old local 8080 backend and database are preserved. Coding remains paused.
 A website version or payload cannot switch this local mode. Use one API
 worker and one gateway worker. Candidate watcher is a deployment template:
 do not start it on active port 8080 during isolated tests. It launches hidden

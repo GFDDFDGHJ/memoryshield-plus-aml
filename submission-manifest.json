@@ -4,11 +4,11 @@
   "base_commit": "d63976daff1f8533c883a9ef25e5861a0ba709e3",
   "files": {
     ".gitignore": "d1c3d65fbfee3de81b1eeb6d9673e7277e0df77beea22d53df1bb3d933731deb",
-    "README.md": "95c40d0bf8840e97091489b9d78d44ab4ce3b824df5f633283683141384d0c2d",
+    "README.md": "00cd9945824702c8e0350d9d1a906afa53a82593b12c4289cd4ef96b51355f0c",
     "LICENSE": "5978e22231ed712444aa74bf9c8a505683813c3a9556896e46608f151d3dc81d",
     "NOTICE.txt": "4edb9fd3532ecc3cdb2cf2674884e56cc9c728e1dcd961ab64fc106b955387fb",
     "SUBMISSION.txt": "a0fab499c5e7b1ff399f2bb59667110a36a44acf9cc525cacb4aae9abdf024ce",
-    "DEPLOYMENT.txt": "df4119140fb8042c0cd566da660297b280538eab1eca947bccabd712228317f3",
+    "DEPLOYMENT.txt": "3100d0f12ee7b3b0845e81d6a336ac8542fcc1187a86d1f34dd68b59a5ed4067",
     "requirements.txt": "2a4f6b3916178d9223d2268046697764c2bf01ebc4594fbb2660693628b30ebd",
     "app.py": "547956976d8d865b1ba1bc87d70510fd67c55d60c8d9dac37abc41692f437fa4",
     "config.py": "7c970bdf49e7b531ecc6fd79e655b9990c50ca22c99cbe8f57b2dac10395cdb4",

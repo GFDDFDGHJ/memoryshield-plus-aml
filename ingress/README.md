@@ -1,13 +1,13 @@
 # Shared Textual / Coding transport
 
-Gateway **v1.1.0** exposes the same original URLs for both tracks:
+Gateway **v1.1.1** exposes the same original URLs for both tracks:
 
 - `https://hlq5070.tail50f4d4.ts.net/add`
 - `https://hlq5070.tail50f4d4.ts.net/search`
 - `https://hlq5070.tail50f4d4.ts.net/health`
 
 The original Memory System Key follows an explicit operator-owned local mode:
-`textual` selects Textual on port 8080; `coding` selects Coding on port 8181.
+`textual` selects the locally configured Textual release; `coding` selects Coding on port 8181.
 The prepared Textual submission uses **`textual`**. Select `coding` only for a separate Coding evaluation after all evaluations have ended. The original Key and the
 public URLs do not change, and the organizer need not replace the Key. The
 gateway supplies the selected backend's separate internal credential. The
@@ -64,7 +64,8 @@ new local mode takes effect.
 ## Transport and health
 
 The request body and decoded backend response entity/status are relayed unchanged.
-Forwarding uses fixed loopback targets, no environment proxy, no redirects and
+Forwarding uses only the two named Textual destinations below and the fixed
+Coding loopback target, no environment proxy, no redirects and
 bounded network timeouts. Content-Type and Retry-After are preserved; transport
 headers are rebuilt to avoid stale length/encoding metadata.
 
@@ -73,6 +74,35 @@ health reflects the current local mode; dedicated Coding-Key health returns
 Coding health. `/__gateway_health` reports the gateway version, current/requested
 legacy mode, configuration validity and active request counts without calling
 models or exposing credentials. Confirm its live mode before every evaluation.
+
+## Select the Textual release locally
+
+The optional operator-owned `textual_backend.json` is read once at gateway
+startup. When absent, Textual continues to use `legacy_v3140`, the exact
+`http://127.0.0.1:8080` destination. To select the existing isolated GPT backend,
+the complete file must be:
+
+```json
+{"textual_backend":"gpt_v3160"}
+```
+
+`gpt_v3160` maps only to `http://100.93.38.9:8380` over this machine's Tailscale
+interface. No arbitrary URL, environment variable or request field can alter
+that mapping. A malformed, unreadable or unknown selection prevents startup;
+it never falls back to the old service after an upstream failure. The backend
+still receives the original Textual Memory System Key. Coding's fixed target
+and credential, and the original Key's local Textual/Coding mode, are unchanged.
+
+Change this private file only after all evaluations have completed and active
+gateway requests have drained, then restart only the gateway. Verify
+`/__gateway_health` reports `version=v1.1.1`, `textual_backend=gpt_v3160` and
+`textual_version=v3.16.0`; verify `/health` and invented Add/Search end to end
+before starting an evaluation. These safe health fields expose no credentials.
+Editing the file does not change an already running process. To roll back,
+select `legacy_v3140` (or remove only this optional file), restart the gateway
+while idle, and verify the resulting release. Neither action stops, migrates,
+copies, or modifies either Textual backend or its memory database. Backend
+version names in gateway health are the configured release, not a live probe.
 
 Run `python -m unittest discover -p "test_*.py"` here for isolated fake-upstream
 and temporary-file checks. This directory reuses the project's existing FastAPI,
