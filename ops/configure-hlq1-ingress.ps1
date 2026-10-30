@@ -7,18 +7,22 @@ Run this saved script in Administrator PowerShell ON hlq-1, after Tailscale
 is online. No API key is needed or read. The backend must already be ready.
 
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\configure-hlq1-ingress.ps1
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\configure-hlq1-ingress.ps1 -MigrateLegacy8080
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\configure-hlq1-ingress.ps1 -Rollback
 
 The only network changes are a loopback TCP portproxy on 127.0.0.1:8380
 and this node's Funnel HTTPS port 443. Existing conflicting configuration
-is refused. Other ports, devices, keys, firewall rules and services are not
-reset. If IP Helper is stopped, it is started and reported; rollback leaves
-that shared Windows service running, while removing this script's routes.
+is refused. -MigrateLegacy8080 permits replacing only the exact existing
+hlq-1 HTTPS root proxy to http://127.0.0.1:8080 with this relay. -Rollback
+restores that original root proxy when the current route is still the exact
+route owned by this script. Other ports, devices, keys, firewall rules and
+services are not reset. If IP Helper is stopped, it is started and reported;
+rollback leaves that shared Windows service running.
 Backups and the ownership journal are saved beside this script. Keep them
 with this script until the relay is no longer needed.
 #>
 [CmdletBinding()]
-param([switch]$Rollback)
+param([switch]$Rollback, [switch]$MigrateLegacy8080)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -30,6 +34,7 @@ $RelayPort = 8380
 $TargetAddress = '100.93.38.9'
 $TargetUrl = 'http://100.93.38.9:8380'
 $LocalUrl = 'http://127.0.0.1:8380'
+$LegacyLocalUrl = 'http://127.0.0.1:8080'
 $ExpectedVersion = 'v3.16.0'
 $ExpectedModel = 'gpt-4o-mini'
 $MappingName = '127.0.0.1/8380'
@@ -120,22 +125,34 @@ function Get-Funnel443Scope {
     }
 }
 
-function Test-DesiredFunnel443 {
-    param($Scope)
+function Test-ExactFunnel443 {
+    param($Scope, [string]$RootProxy)
     if (-not $Scope.Present -or $Scope.Foreground443Present) { return $false }
     if ($null -eq $Scope.TCP443) { return $false }
     if (@($Scope.TCP443.PSObject.Properties).Count -ne 1) { return $false }
-    if ((Get-PropertyValue $Scope.TCP443 'HTTPS') -cne $true) { return $false }
+    if ((Get-PropertyValue $Scope.TCP443 'HTTPS') -isnot [bool] -or
+        (Get-PropertyValue $Scope.TCP443 'HTTPS') -cne $true) { return $false }
     if (@($Scope.Web443.PSObject.Properties).Count -ne 1) { return $false }
     if (@($Scope.AllowFunnel443.PSObject.Properties).Count -ne 1) { return $false }
-    if ((Get-PropertyValue $Scope.AllowFunnel443 $FunnelKey) -cne $true) { return $false }
+    if ((Get-PropertyValue $Scope.AllowFunnel443 $FunnelKey) -isnot [bool] -or
+        (Get-PropertyValue $Scope.AllowFunnel443 $FunnelKey) -cne $true) { return $false }
     $hostWeb = Get-PropertyValue $Scope.Web443 $FunnelKey
     if ($null -eq $hostWeb -or @($hostWeb.PSObject.Properties).Count -ne 1) { return $false }
     $handlers = Get-PropertyValue $hostWeb 'Handlers'
     if ($null -eq $handlers -or @($handlers.PSObject.Properties).Count -ne 1) { return $false }
     $rootHandler = Get-PropertyValue $handlers '/'
     if ($null -eq $rootHandler -or @($rootHandler.PSObject.Properties).Count -ne 1) { return $false }
-    return ((Get-PropertyValue $rootHandler 'Proxy') -ceq $LocalUrl)
+    return ((Get-PropertyValue $rootHandler 'Proxy') -ceq $RootProxy)
+}
+
+function Test-DesiredFunnel443 {
+    param($Scope)
+    return (Test-ExactFunnel443 -Scope $Scope -RootProxy $LocalUrl)
+}
+
+function Test-LegacyFunnel443 {
+    param($Scope)
+    return (Test-ExactFunnel443 -Scope $Scope -RootProxy $LegacyLocalUrl)
 }
 
 function Get-Portproxy8380 {
@@ -207,16 +224,38 @@ function Assert-JournalScope {
             throw 'Ownership journal is incomplete. Review it manually; nothing was changed.'
         }
     }
+    # Format 1 journals written before migration support have no such flag.
+    # Only an explicit JSON boolean can authorize restoring the known old route.
+    $restoreProperty = $Journal.PSObject.Properties['RestoreLegacy8080']
+    if ($null -eq $restoreProperty) {
+        $Journal | Add-Member -MemberType NoteProperty -Name RestoreLegacy8080 -Value $false
+    }
+    elseif ($restoreProperty.Value -isnot [bool]) {
+        throw 'Ownership journal has an invalid migration flag. Review it manually; nothing was changed.'
+    }
 }
 
 function Undo-OwnedRoutes {
-    # Only remove a route when both its journal ownership and current exact
-    # configuration match. Do not overwrite an administrator's later change.
+    # Only restore/remove a route when both its journal ownership and current
+    # exact configuration match. Never overwrite an administrator's later edit.
     $issues = @()
     if ($script:Journal.OwnsFunnel443) {
         try {
             $scope = Get-Funnel443Scope (Get-FunnelConfiguration)
-            if ($scope.Present) {
+            if ($script:Journal.RestoreLegacy8080) {
+                if (Test-DesiredFunnel443 $scope) {
+                    $null = Invoke-Native -File $script:TailscaleExe -Arguments @('funnel', '--bg', '--https=443', '--yes', $LegacyLocalUrl) -Description 'Restore original hlq-1 root proxy'
+                    if (-not (Test-LegacyFunnel443 (Get-Funnel443Scope (Get-FunnelConfiguration)))) {
+                        throw 'The original Funnel 443 route was not restored exactly.'
+                    }
+                }
+                elseif (-not (Test-LegacyFunnel443 $scope)) {
+                    throw 'Funnel 443 changed after setup. The saved original route was not restored over later edits.'
+                }
+                # If a failed native mutation left the old route unchanged,
+                # it is already restored and no further mutation is needed.
+            }
+            elseif ($scope.Present) {
                 if (-not (Test-DesiredFunnel443 $scope)) { throw 'Funnel 443 changed after setup.' }
                 $null = Invoke-Native -File $script:TailscaleExe -Arguments @('funnel', '--https=443', 'off') -Description 'Remove owned Funnel 443'
                 if ((Get-Funnel443Scope (Get-FunnelConfiguration)).Present) { throw 'Funnel 443 is still configured.' }
@@ -224,7 +263,7 @@ function Undo-OwnedRoutes {
             $script:Journal.OwnsFunnel443 = $false
             Save-Journal
         }
-        catch { $issues += 'Owned Funnel 443 could not be safely removed; review the saved backup.' }
+        catch { $issues += 'Owned Funnel 443 could not be safely restored or removed; review the saved backup.' }
     }
     if ($script:Journal.OwnsPortproxy) {
         try {
@@ -250,6 +289,7 @@ function Undo-OwnedRoutes {
 
 $lockHandle = $null
 try {
+    if ($Rollback -and $MigrateLegacy8080) { throw 'Use either -Rollback or -MigrateLegacy8080, not both.' }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -289,15 +329,21 @@ try {
     if ($Rollback) {
         if ($null -eq $script:Journal) { throw 'No ownership journal exists beside this script. Nothing was changed.' }
         Undo-OwnedRoutes
-        Write-Host 'Rollback complete. Only routes created by this script were removed; original routes and other ports were preserved.'
+        Write-Host 'Rollback complete. The original root proxy was restored if migrated; only routes created by this script were removed. Other ports were preserved.'
         exit 0
     }
 
     # Require the exact isolated backend before touching local networking.
     Assert-ReadyHealth $TargetUrl
     $funnelBefore = Get-Funnel443Scope (Get-FunnelConfiguration)
+    $migrateLegacyRoute = $false
     if ($funnelBefore.Present -and -not (Test-DesiredFunnel443 $funnelBefore)) {
-        throw 'HTTPS/Funnel port 443 already has different configuration. Review it manually; nothing was changed.'
+        if ($MigrateLegacy8080 -and (Test-LegacyFunnel443 $funnelBefore)) {
+            $migrateLegacyRoute = $true
+        }
+        else {
+            throw 'HTTPS/Funnel port 443 already has different configuration. Only the exact known hlq-1 root proxy to 127.0.0.1:8080 may be migrated with -MigrateLegacy8080; nothing was changed.'
+        }
     }
     $rulesBefore = @(Get-Portproxy8380)
     if ($rulesBefore.Count -gt 0 -and -not (Test-DesiredPortproxy $rulesBefore)) {
@@ -339,6 +385,7 @@ try {
             IpHelperStarted = $false
             OwnsPortproxy = $false
             OwnsFunnel443 = $false
+            RestoreLegacy8080 = [bool]$migrateLegacyRoute
             Active = $true
             LastAction = 'prepared'
         }
@@ -370,12 +417,34 @@ try {
         }
         if (-not $relayReady) { throw 'The local relay health check did not pass.' }
 
-        if (-not $funnelBefore.Present) {
+        if ($migrateLegacyRoute) {
+            $currentScope = Get-Funnel443Scope (Get-FunnelConfiguration)
+            if (-not (Test-LegacyFunnel443 $currentScope)) {
+                throw 'Funnel 443 changed during setup. Refusing to replace it.'
+            }
+            $script:Journal.OwnsFunnel443 = $true
+            $script:Journal.LastAction = 'migrating-legacy-funnel'
+            Save-Journal
+            # Saving the journal can take time. Recheck the exact old scope
+            # immediately before replacement; a different route is not owned.
+            if (-not (Test-LegacyFunnel443 (Get-Funnel443Scope (Get-FunnelConfiguration)))) {
+                $script:Journal.OwnsFunnel443 = $false
+                Save-Journal
+                throw 'Funnel 443 changed before migration. No Funnel route was replaced.'
+            }
+            $null = Invoke-Native -File $script:TailscaleExe -Arguments @('funnel', '--bg', '--https=443', '--yes', $LocalUrl) -Description 'Migrate this node HTTPS root proxy from port 8080 to 8380'
+        }
+        elseif (-not $funnelBefore.Present) {
             $currentScope = Get-Funnel443Scope (Get-FunnelConfiguration)
             if ($currentScope.Present) { throw 'Funnel 443 changed during setup. Refusing to overwrite it.' }
             $script:Journal.OwnsFunnel443 = $true
             $script:Journal.LastAction = 'creating-funnel'
             Save-Journal
+            if ((Get-Funnel443Scope (Get-FunnelConfiguration)).Present) {
+                $script:Journal.OwnsFunnel443 = $false
+                Save-Journal
+                throw 'Funnel 443 changed before creation. No Funnel route was created.'
+            }
             $null = Invoke-Native -File $script:TailscaleExe -Arguments @('funnel', '--bg', '--https=443', '--yes', $LocalUrl) -Description 'Enable this node Funnel HTTPS 443'
         }
         if (-not (Test-DesiredFunnel443 (Get-Funnel443Scope (Get-FunnelConfiguration)))) {

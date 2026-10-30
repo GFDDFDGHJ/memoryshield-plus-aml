@@ -55,7 +55,10 @@ The new entry is a separate relay: hlq-1 Funnel 443 -> its loopback 8380
 portproxy -> WireGuard tailnet -> hlq5070 100.93.38.9:8380, bound only on the
 Tailscale interface. ops/configure-hlq1-ingress.ps1 runs on the owning hlq-1
 Windows node with Administrator PowerShell, backs up scoped configuration,
-refuses conflicting routes and supports -Rollback. It never reads API keys.
+refuses conflicting routes by default and supports -Rollback. For the exact
+existing hlq-1 root proxy to 127.0.0.1:8080, -MigrateLegacy8080 backs it up and
+replaces only that root; rollback restores it. Other ports/routes are preserved.
+It never reads API keys.
 ops/watch-isolated-textual.ps1 supervises the independent backend hidden with
 persisted provider keys and the original Memory System Key. Its runtime is
 deployments/textual-v3.16.0 with its own database and logs. Keep both machines
@@ -74,8 +77,10 @@ Suggested initial platform concurrency is Add=2 / Search=2, Top K=100.
 GPT admits two batches, waiting at most one second on overload, then returns
 retryable 503. Per-operation model timeout is 60 seconds; the extraction
 deadline is 180 seconds, checked before/after calls. Embedding timeout is
-45 seconds with no SDK retries; SQLite lock wait is 30 seconds; current gateway
-I/O timeout is 300 seconds. These are operation/validation limits, not hard
+45 seconds with no SDK retries; SQLite lock wait is 30 seconds. The unchanged
+legacy gateway has a 300-second I/O timeout; the new Funnel relay does not pass
+through that gateway and its complete timeout envelope is not measured.
+These are operation/validation limits, not hard
 wall-clock cancellation or measured Full-scale throughput. Failed provider
 calls can still cost money; committed usage is not a billing ledger.
 

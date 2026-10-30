@@ -38,6 +38,7 @@ FILES = (
     "evaluate_synthesis_progression.py", "evaluate_global_priority_controls.py",
     "watcher.ps1", "run-watcher.cmd",
     "ops/watch-isolated-textual.ps1", "ops/configure-hlq1-ingress.ps1",
+    "ops/test_hlq1_migration.ps1",
     "prepare_submission.py",
 )
 ROOT = Path(__file__).resolve().parent

@@ -23,7 +23,9 @@ Health：https://hlq-1.tail50f4d4.ts.net/health
 沿用原 Memory System Key，不公开密钥。新入口 hlq-1 Funnel 443 ->
 该机 loopback 8380 -> WireGuard 尾网 -> 当前机 100.93.38.9:8380。
 ops/configure-hlq1-ingress.ps1 在 hlq-1 的管理员 PowerShell 中配置，
-拒绝覆盖冲突路由，先备份并支持 -Rollback；不读取 Key。
+默认拒绝覆盖冲突路由，先备份并支持 -Rollback；不读取 Key。
+用户确认的原 hlq-1 根代理 127.0.0.1:8080，可用 -MigrateLegacy8080
+精确迁移到新入口，回滚恢复原代理；保留其他端口与路由。
 当前机 ops/watch-isolated-textual.ps1 隐藏守护独立运行目录
 deployments/textual-v3.16.0，候选库 aml_text_gpt_v316.db、日志均独立。
 两台电脑均需联网且不休眠。新公网 Add/Search 待入口配置后复验。
@@ -33,7 +35,8 @@ deployments/textual-v3.16.0，候选库 aml_text_gpt_v316.db、日志均独立�
 建议初始并发 Add=2 / Search=2、Top K=100；这不是 Full 容量认证。
 GPT 并发 2，过载等待最多 1 秒后 503；模型操作超时 60 秒，整批提取
 截止 180 秒，调用前后校验。Embedding 超时 45 秒且无 SDK 重试；
-SQLite 锁等待 30 秒；入口 I/O 超时 300 秒。网络操作超时不等于严格
+SQLite 锁等待 30 秒；原共享入口 I/O 超时 300 秒，新 Funnel 中转不经过
+该共享入口，整链超时范围尚未实测。网络操作超时不等于严格
 墙钟取消，大输入/限流/失败会影响实际用时和费用。成功提交用量表不是
 完整账单；失败调用也可能计费。Windows 隐藏启动刷新用户/系统 Key，
 重启后依赖用户登录。完整 Full 容量与总费用尚未端到端验证。
