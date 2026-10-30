@@ -1,0 +1,87 @@
+MemoryShield+ — Textual source attribution and scope
+
+Project: MemoryShield+ AML Textual Memory
+Repository: https://github.com/GFDDFDGHJ/memoryshield-plus-aml
+Project author recorded in Git: GFDDFDGHJ
+Copyright (c) 2026 GFDDFDGHJ
+
+The project author has confirmed the right to release this project's code
+under the MIT license. See LICENSE for that grant. This notice does not
+relicense third-party software, model weights or provider services.
+
+1. Project history
+
+The original public project baseline is:
+  aed97db67b7dbd6d4d35678b4c0c609cf2050014
+Its Git author is GFDDFDGHJ. That baseline implemented the AML Add/Search
+service using FastAPI, SQLite/sqlite-vec and Ark embeddings, with retrieval
+and a keyword governance hook. This historical description is not the
+current model configuration.
+
+The Textual v3.14.0 algorithm source is:
+  db43d67ea1728497ab7b5418a2fd9c62a5c29b71
+The final publication revision is recorded separately in the release packet's
+release-reference.txt after publication; it must match the submitted service.
+Licensing, source disclosures and submission-document corrections do not
+represent a new retrieval method or a new evaluation result.
+
+Relative to the original baseline, this Textual implementation changes:
+- embeddings to standard text-embedding-v4, 1024 dimensions;
+- retrieval to exact user-scoped cosine scoring, lexical/source recall and
+  optional bounded qwen3-rerank, with deterministic fallback;
+- synchronous, persistent request-id retry/conflict handling and source,
+  role, session, sequence and timestamp provenance;
+- deterministic extraction of facts, preferences and rules, role-aware state
+  history, late-arrival handling and conservative assertion qualification;
+- query-scoped rule/procedure context, explicit source-reference links,
+  declared table schemas and observations, extractive summaries and bounded
+  source continuations that retain original evidence and disclose omissions;
+- explicit private-field exclusions, source-scope controls and disabling
+  the legacy substring governance feature by default;
+- request logging that records operational metadata rather than message or
+  query payloads, plus independent synthetic regression checks.
+
+The name MemoryShield+ is this project's name. This submission does not
+claim to reproduce a particular MemoryShield/MemoryShield+ paper or to be
+affiliated with any paper's authors. The repository's current history and
+source notices are the provenance evidence; an author name in Git alone is
+not a proof that every line was independently authored.
+
+2. Dependencies and providers
+
+The following are dependencies, not code redistributed under this project's
+MIT grant. Their respective notices, licenses and transitive-dependency
+requirements remain applicable:
+- FastAPI: https://github.com/fastapi/fastapi
+- Uvicorn: https://github.com/encode/uvicorn
+- sqlite-vec: https://github.com/asg017/sqlite-vec
+- OpenAI Python SDK: https://github.com/openai/openai-python
+- HTTPX: https://github.com/encode/httpx
+- Pydantic, used through FastAPI: https://github.com/pydantic/pydantic
+- NumPy, optional acceleration: https://github.com/numpy/numpy
+- Python and SQLite are separately licensed platform components.
+
+Pinned direct Python package versions are in requirements.txt. No vendored
+copy of those dependency projects is included in the Textual source ZIP.
+The OpenAI SDK is used for the compatible embedding API; its presence does
+not mean this method invokes a generative OpenAI model.
+
+Alibaba Cloud Model Studio/DashScope provides text-embedding-v4 and the
+optional qwen3-rerank service. Provider terms, API access, usage charges and
+any model licenses are independent of this repository's license.
+
+3. Submission and evaluation boundaries
+
+This notice covers the Textual entry. The separate Coding directory states
+its reuse of the Textual bounded reranker client in coding/README.md.
+The ingress directory contains the shared transport and its own source
+manifest; include that material when describing the deployed public API.
+
+Add and Search make no generative LLM calls and return stored evidence, not
+generated final answers. The LLM-free eligibility question remains pending
+official clarification; no eligibility approval is claimed here.
+Official requirements: https://agentmemories.ai/docs
+Model-scope discussion: https://github.com/AML-memory/agent-memory-leaderboard/issues/19
+
+Official evaluation memories, questions, answers, credentials, runtime
+databases and derived copies are excluded from this source disclosure.

@@ -4,7 +4,7 @@
   "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
   "files": {
     ".gitignore": "92278d12f5bd7c12df6a5c95555697810db75de5c64572b2189ad9567eb03ab0",
-    "README.md": "ea462610d98738703edaa5c95008cd4a223e8d2496fec753b79a70a766f5fc06",
+    "README.md": "1a636ff59bc987e41eedd6e1b2ea590d48445733c3ad06c2f3e4fd23b3ef0912",
     "gateway.py": "a386ac1d77d9f5bcc11b8e2c7f5bda854c00179101fe2268323fad6b9378dad5",
     "watcher.ps1": "2b04cb1c2481cd9cd24a7d653de467466dc98a37ee5faeb4ba2d6ccdab02456f",
     "test_gateway.py": "f1b778a5664a22432b4411ec82760c05def08ea3e9229ce99f0b191143f3698f",

@@ -8,7 +8,7 @@ Gateway **v1.1.0** exposes the same original URLs for both tracks:
 
 The original Memory System Key follows an explicit operator-owned local mode:
 `textual` selects Textual on port 8080; `coding` selects Coding on port 8181.
-This release's Coding evaluation mode is **`coding`**. The original Key and the
+The prepared Textual submission uses **`textual`**. Select `coding` only for a separate Coding evaluation after all evaluations have ended. The original Key and the
 public URLs do not change, and the organizer need not replace the Key. The
 gateway supplies the selected backend's separate internal credential. The
 dedicated Coding Key always selects Coding, regardless of the original Key's

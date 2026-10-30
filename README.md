@@ -1,14 +1,16 @@
 # MemoryShield+ — AML Textual Memory
 
-Candidate version: **v3.15.0**. Repository:
+Candidate version: **v3.14.0**. Repository:
 <https://github.com/GFDDFDGHJ/memoryshield-plus-aml>.
 
 Self-hosted synchronous Add/Search service for the Agent Memory Leaderboard
 Textual track / Open-source Methods division. Search returns stored evidence;
 the platform handles answering and scoring.
 
-This is a release candidate. The public repository and running API must be
-updated to the same version, then pass the official Smoke before Full.
+The target is the existing Textual **v3.14.0** version that previously passed
+official Smoke. Submission-material corrections, licensing and deployment notes
+retain its retrieval algorithms. Confirm that the deployed source/configuration
+and the same-track Smoke-passed website version match before Full.
 
 Versions use `vMAJOR.MINOR.PATCH`: large changes increment MAJOR, medium
 changes increment MINOR, and small changes increment PATCH. Incrementing a
@@ -46,12 +48,11 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
   that scope. Explicit private-field exclusions remain separate constraints.
 - Topic synthesis uses the same query plan in selection and budgeting. Global
   context schedules less-repeated literal sentences before repeated background,
-  without merging observations. Hard global constraints remain protected; known presentational policies have
-  a bounded front with explicit omission disclosure when sampled. Every selected
-  source RID remains recoverable from the view and its continuation.
+  without merging observations. One original instance of each applicable global
+  response policy is protected before optional context; every source RID remains.
 - Bounded global summaries visit less-repeated sentences within each source
-  before round-robin sampling across sources. Global views can display distinct representative records first; original
-  sequence and within-source positions remain attached to every selected segment.
+  before round-robin sampling across sources. Complete short views keep their
+  original order; continuations still preserve all selected source segments.
 - When literal context exceeds its budget, identical whole records can share
   one literal template while keeping a separate metadata row for every source
   occurrence. Distinct RIDs and repeated observations are retained; a summary
@@ -146,9 +147,13 @@ higher field resets lower fields to zero. The previous `v3.8` is `v3.8.0`.
 
 The current [AML documentation](https://agentmemories.ai/docs) specifies
 `text-embedding-v4` for Open-source Methods embeddings and `gpt-4o-mini` for
-LLM components. Whether an entirely LLM-free method must introduce one is
+LLM components; rerankers are unrestricted. This implementation makes zero
+generative LLM calls in Add and Search. Whether an entirely LLM-free method must introduce one is
 unresolved in [official issue #19](https://github.com/AML-memory/agent-memory-leaderboard/issues/19).
-Disclose this regex-only implementation and obtain clarification before Full.
+The Full checklist also says Open-source Methods entries are expected to use
+`gpt-4o-mini` during Add. Disclose this regex-only configuration accurately;
+neither this repository nor its Smoke results establish official approval of
+LLM-free eligibility. That point remains pending clarification.
 
 ## Setup
 
@@ -200,7 +205,7 @@ override it. See [Alibaba quota documentation](https://help.aliyun.com/zh/model-
 | `EMBEDDING_API_KEY` | Project secret or `DASHSCOPE_API_KEY` |
 | `AML_DB_PATH` | Project-local `aml_text_v4.db` |
 | `AML_AUTH_TOKEN` | `.secrets/aml_auth_token.txt` |
-| `AML_VERSION` | `2026.10.23-rc8` |
+| `AML_VERSION` | `v3.14.0` |
 | `AML_RERANK` | `false`; watcher enables `true` |
 | `AML_RERANK_MODEL` | `qwen3-rerank` |
 | `AML_RERANK_API_KEY` | Embedding key |
@@ -308,18 +313,38 @@ Source-driven context does not depend on rebuilding cached session digests.
 Use a continuously available host, stable public HTTPS URL, dedicated
 authentication, and documented capacity/concurrency/timeouts. `start.ps1` runs
 in the foreground; configure a host-managed supervisor for unattended service.
-Historical watcher/tunnel scripts are deployment-specific. Cloudflare quick
-tunnel names change after restarts and require updating the AML API binding.
+The portable reproduction entry point is `start.ps1` or uvicorn, with the
+pinned requirements installed. The historical Windows watcher additionally
+needs `AML_PYTHON` on another host, Tailscale at its configured location, and
+its deployment-specific Cloudflare executable if that fallback is used.
 
 This Windows deployment keeps the existing public origin
 `https://hlq5070.tail50f4d4.ts.net` and the same `/add` and `/search` paths.
-`watcher.ps1` supervises the rc8 API. It pins Beijing `text-embedding-v4`, 1024
-dimensions, and `aml_text_v4.db`; health probes verify version and model. A
-lifetime file lock prevents duplicate supervisors. Launch the watcher outside
-the interactive tool process; the current host uses `Win32_Process.Create`.
-The existing participant authentication key remains unchanged. Keep the host
-awake during Smoke. A separate Cloudflare fallback is deployment-specific and
-does not replace the fixed participant origin.
+Funnel 443 forwards to the shared, loopback-only gateway on port 8282. Its
+operator-owned `legacy_key_target=textual` selects this Textual service on
+port 8080 for the original Memory System Key. The original public URLs and
+Key remain unchanged; never publish the Key value. The gateway does not infer
+the track from website version names, request text or user IDs, and does not
+merge the independent Textual and Coding databases.
+
+Only switch the original Key's local mode after **all Smoke and Full
+evaluations have ended**. Idle HTTP counters alone do not establish that an
+evaluation has finished. Before a Textual evaluation, verify valid local
+configuration, `legacy_key_target=textual`, no pending switch and zero active
+requests at `/__gateway_health`. Preserve this mode, source and configuration
+throughout Full. The original Key supports one track at a time. See
+[ingress/README.md](ingress/README.md) for the guarded switching CLI and its
+single-worker gateway requirement.
+
+`watcher.ps1` supervises the v3.14.0 Textual API. It pins Beijing
+`text-embedding-v4`, 1024 dimensions, and `aml_text_v4.db`; local health probes
+verify version and model. A lifetime lock prevents duplicate supervisors.
+The current Windows host starts hidden watchers through the user's **Startup
+folder after login**, rather than a scheduled task. This depends on that user
+logging in after a reboot. Keep the host awake and its sessions operational
+through evaluation. The ingress watcher owns the fixed Funnel destination;
+the Textual watcher's historical direct-8080 recovery fallback must not be
+used as a separate intended public route.
 
 The supervisor also checks the fixed origin through public IPv4 ingress every
 120 seconds. It obtains public addresses using DNS over HTTPS and pins each
@@ -330,12 +355,27 @@ the service log. Public-check failures do not restart a healthy local API.
 Deploy before starting an evaluation and keep code fixed until it completes.
 Request audit records include the runtime version without query/message content.
 
+For the next Textual run, the conservative starting recommendation is
+**Add concurrency 2 / Search concurrency 2**, entered in the platform. This is
+a suggested operating point, not a measured Full-scale capacity guarantee or
+a newly enforced server-side limit. Full-scale storage, RAM, provider quota,
+bandwidth and sustained throughput have not been measured end to end.
+Source defaults include embedding concurrency 8, SQLite lock wait 30 seconds,
+and bounded reranking at 8 concurrent calls / 6-second network operations.
+The shared gateway uses a 300-second I/O timeout, with connect/write/pool
+timeouts of 3/60/10 seconds. The embedding SDK timeout is not explicitly set
+by this application. These settings and offline tests do not prove that all
+Full requests will complete within their effective deadlines.
+
 Before Full:
 
 1. Verify real synthetic Add → Search using the approved embedding model.
 2. Publish the complete candidate source and record its immutable commit.
-3. Complete license, source attribution, and capacity declarations.
-4. Update the submitted API version/binding and pass official Smoke.
+3. Include `LICENSE`, [NOTICE.txt](NOTICE.txt), [SUBMISSION.txt](SUBMISSION.txt),
+   and an accurate capacity declaration; retain the LLM-free eligibility disclosure.
+4. Confirm the existing Textual v3.14.0 binding and its completed same-version
+   Smoke. The per-track Smoke allowance is cumulative; creating a version
+   does not reset it. Do not relabel different code as this version.
 5. Freeze the deployed code and configuration for the formal run.
 
 Official [participation guide](https://agentmemories.ai/competition/) and
@@ -344,15 +384,28 @@ Official [participation guide](https://agentmemories.ai/competition/) and
 
 ## Publication and provenance
 
-Inspected public base commit: `aed97db67b7dbd6d4d35678b4c0c609cf2050014`.
-That base has no license or complete attribution statement. The author must
-select an open-source license and disclose reused papers, repositories, and
-code before the formal submission. The name “MemoryShield+” alone does not establish
-that this implementation reproduces a particular paper.
+The project author recorded in the public Git history is **GFDDFDGHJ**.
+The author has confirmed the right to release this project under the MIT
+license; see `LICENSE` and [NOTICE.txt](NOTICE.txt). Third-party dependencies
+and provider services retain their own licenses and terms. The project name
+“MemoryShield+” does not assert reproduction of a particular paper or
+affiliation with its authors.
+
+Historical public base: `aed97db67b7dbd6d4d35678b4c0c609cf2050014`.
+Textual v3.14.0 algorithm source: `db43d67ea1728497ab7b5418a2fd9c62a5c29b71`.
+`base_commit` in the source manifest denotes the historical baseline. Use
+the full immutable publication commit in the accompanying
+`release-reference.txt` for the submitted release; that reference is generated
+after publication rather than embedded as its own commit hash.
 
 Relative to that public base, this candidate adds the fact/digest layer and
 repairs retrieval, rule/state semantics, ingestion retries, model settings,
 and content logging. The declared public commit must include the full change.
+The root source ZIP covers Textual; the gateway has its own source archive and
+manifest in `ingress/`. The public repository at the declared release commit
+contains both. Include the gateway material alongside the Textual source when
+describing the complete deployed public service. Coding reuse is documented in
+[coding/README.md](coding/README.md) and is outside this Textual entry.
 
 ## Evaluation data
 
