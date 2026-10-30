@@ -1,6 +1,7 @@
 MemoryShield+ 文本候选版 v3.16.0
 
-状态：独立后端已安装；hlq-1 公网入口待另一台电脑运行配置脚本。
+状态：独立后端与 hlq-1 公网入口均已部署，公网模拟 Add/Search 验证通过。
+新加坡/中国/美国独立 Health 探针均 200，TLS 有效。
 本版本无官方 Smoke，未启动 Full；原 hlq5070 线上仍为 v3.14.0。
 旧 Smoke 不适用于本次改动。
 仓库：https://github.com/GFDDFDGHJ/memoryshield-plus-aml
@@ -28,7 +29,8 @@ ops/configure-hlq1-ingress.ps1 在 hlq-1 的管理员 PowerShell 中配置，
 精确迁移到新入口，回滚恢复原代理；保留其他端口与路由。
 当前机 ops/watch-isolated-textual.ps1 隐藏守护独立运行目录
 deployments/textual-v3.16.0，候选库 aml_text_gpt_v316.db、日志均独立。
-两台电脑均需联网且不休眠。新公网 Add/Search 待入口配置后复验。
+两台电脑均需联网且不休眠。新公网两个 A 记录均通过模拟 Add/Search、
+重放/冲突处理、鉴权、Top K、并行检索与用户隔离验证；不是官方 Smoke。
 原 hlq5070 443 -> 8282 -> 文本 8080，legacy_key_target=textual 不变。
 代码赛道暂停、数据独立；旧文本数据不迁移、不改动。
 

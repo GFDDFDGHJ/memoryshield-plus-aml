@@ -1,7 +1,7 @@
 # MemoryShield+ — Textual candidate v3.16.0
 
-**Candidate only: isolated backend installed; public hlq-1 relay setup pending;
-no matching official Smoke, no Full started.**
+**Candidate v3.16.0 is deployed at hlq-1; independent public health and invented
+Add/Search checks passed. No matching official Smoke or Full has been run.**
 The existing hlq5070 service remains v3.14.0. Its passed Smoke does not qualify this
 changed implementation. The Chinese Full checklist explicitly requires
 gpt-4o-mini during Add; the old LLM-free service does not meet that condition.
@@ -62,7 +62,10 @@ It never reads API keys.
 ops/watch-isolated-textual.ps1 supervises the independent backend hidden with
 persisted provider keys and the original Memory System Key. Its runtime is
 deployments/textual-v3.16.0 with its own database and logs. Keep both machines
-online and awake. Public Add/Search verification remains pending relay setup.
+online and awake. Public Add/Search, replay/conflict handling, authentication,
+Top K and user isolation passed on both currently published Funnel IPv4
+addresses on October 31, 2026. Independent SG/CN/US health probes also passed
+with valid TLS. These connectivity checks are not official Smoke results.
 
 The unchanged legacy entry hlq5070 uses shared ingress 443 -> loopback 8282 -> Textual 8080 with
 legacy_key_target=textual. Coding remains paused with separate storage.
