@@ -1,0 +1,139 @@
+MemoryShield+ 文本赛道 v3.16.0 — Windows 部署说明
+整理日期：2026-10-31（北京时间）
+
+这是可独立部署的文本项目源码，不包含 Key、运行数据库或评测原始数据。
+本次增加便携启动方式，模型和检索算法保持 v3.16.0 不变。
+新机器启动不会自动修改原来 hlq5070 / hlq-1 的服务和公网转发。
+
+一、准备项目和 Python
+
+1. 解压项目 ZIP 到新目录，例如 C:\AML-Textual-v3160。
+   进入包含 requirements.txt、app.py 和 ops 文件夹的那一层目录，
+   在此目录打开 PowerShell。后续命令均在该目录运行。
+   Git 用户也可以拉取 candidate/textual-v3.16.0 分支；固定提交见下载说明。
+   GitHub 默认 main 仍是旧版，请勿直接用 main 代替本候选版本。
+
+2. 安装 64 位 Python 3.11 或 3.12，然后建立独立环境：
+
+   py -3.12 -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+   如果安装的是 Python 3.11，将第一条改为 py -3.11 -m venv .venv。
+   已有 Python 3.10 以上环境也可用 python -m venv .venv。
+   不需要激活 venv；启动脚本会优先使用项目自己的 .venv。
+
+二、配置三份 Key（不要提交 Git，也不要贴到聊天）
+
+3. 在项目目录新建 .secrets 文件夹：
+
+   New-Item -ItemType Directory -Path .secrets -Force | Out-Null
+   notepad .secrets\openai_api_key.txt
+   notepad .secrets\dashscope_api_key.txt
+   notepad .secrets\aml_auth_token.txt
+
+   每个文件只保存相应 Key 本身，一行即可，不加引号或变量名。
+   保存为 UTF-8 文本，确认文件名没有多出一个 .txt。
+
+   openai_api_key.txt：可调用官方 gpt-4o-mini 的 OpenAI Key。
+   dashscope_api_key.txt：北京地域百炼 Key，需能调用 text-embedding-v4
+                          和 qwen3-rerank；确认额度/计费开关允许使用。
+   aml_auth_token.txt：官网该版本绑定的 Memory System Key（接口鉴权 Key）。
+                      沿用原鉴权时填原 Memory System Key；不要填 Eval Key。
+
+   也支持环境变量 OPENAI_API_KEY、DASHSCOPE_API_KEY、AML_AUTH_TOKEN。
+   读取优先级：对应 .secrets 文件 > 当前进程 > 用户变量 > 系统变量。
+   文件存在但为空会报错，不会悄悄换用其他 Key。
+
+三、检查并启动
+
+4. 先做配置检查，不调用模型、不创建数据库：
+
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ops\run-portable.ps1 -CheckConfiguration
+
+   看到 Configuration ready: v3.16.0, 127.0.0.1:18080 后再启动：
+
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ops\run-portable.ps1
+
+   默认只监听本机 127.0.0.1:18080，单 worker。
+   这是前台启动：保留窗口；Ctrl+C 停止。不要直接关掉运行窗口。
+   如果端口已被占用，可追加 -Port 18081，并同步修改下面的隧道目标。
+   如需后台托管，应由服务管理器管理本脚本和隧道进程。
+
+   可选：给启动命令追加 -CheckModels，将先用虚构数据和临时库做一次
+   少量付费 Add/Search 联调，通过后继续启动正式服务。
+   该检查会消耗 OpenAI 和百炼额度，但不是官网 Smoke，也不占官网次数。
+   不追加此参数时，普通启动不会主动做付费联调。
+
+5. 在另一个 PowerShell 窗口查看本地健康状态：
+
+   Invoke-RestMethod http://127.0.0.1:18080/health
+
+   应包含 version=v3.16.0、embedding_model=text-embedding-v4、
+   add_model=gpt-4o-mini、add_model_required=true、add_model_configured=true，
+   并显示 reranker 已启用。Health 可用不代表模型余额和调用权限已验证。
+
+   本启动脚本固定使用：官方 https://api.openai.com/v1 的 gpt-4o-mini；
+   北京百炼 text-embedding-v4，standard / 1024 维；qwen3-rerank 开启。
+   不要另外运行旧 start.ps1、watcher.ps1、run-watcher.cmd 或
+   ops/watch-isolated-textual.ps1；这些不是本说明的便携启动入口。
+
+四、提供公网地址
+
+6. 本机启动成功后，仍需一个评测网络可访问的 HTTPS 入口。
+   已有稳定域名/反向代理时，将它指向这台机器的 127.0.0.1:18080。
+
+   临时联调可从 Cloudflare 官方安装 cloudflared：
+   https://developers.cloudflare.com/tunnel/downloads/
+   然后在另一个窗口运行：
+
+   cloudflared tunnel --url http://127.0.0.1:18080
+
+   以程序当次输出的 https://随机名称.trycloudflare.com 为准，分别使用：
+   Health：https://当次域名/health
+   Add：   https://当次域名/add
+   Search：https://当次域名/search
+
+   Add 与 Search 必须同属这台文本服务，使用上面配置的接口鉴权 Key。
+   不要给入口加浏览器登录或邮箱验证，它会阻断评测 API 请求。
+   Quick Tunnel 进程需持续运行；重建可能换域名，官方不保证其可用性。
+   Full 应准备稳定入口，并在整个评测期间保持电脑、服务和隧道在线。
+   官方说明：https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/
+
+   之前的 sensor-latex-solid-workout.trycloudflare.com 已无法解析；
+   启动项目不会恢复这个临时域名，请以新输出的地址为准。
+
+   hlq-1 目前仍转发到旧电脑上的独立后端。若要改为这台电脑本地部署，
+   需要另行调整该机已有的转发配置；不要重复运行旧的
+   configure-hlq1-ingress.ps1，它会指回原后端。本脚本不接管这些路由。
+
+五、上线前检查与后续运行
+
+7. 从外部网络验证新的 HTTPS /health，再确认官网版本绑定的 Add、
+   Search、鉴权与本部署一致。首次建议 Add=2、Search=2、Top K=100。
+   这是起始并发建议，不是已验证的 Full 容量承诺。
+   v3.16.0 尚无对应的官方 Smoke 或 Full 通过结果；连接测试不能替代它。
+   在平台允许的评测资格内完成对应版本 Smoke，再按官网清单开始 Full。
+   更换域名本身不会恢复 Smoke 额度。
+
+8. 数据保存在 data\aml_text_gpt_v316.db，以及运行时同目录的 SQLite
+   辅助文件。服务每次重启继续使用同一库；勿在评测中移动、删除或覆盖。
+   需要备份时先正常停止服务，再备份整个 data 文件夹。
+   不要把其他版本、代码赛道或不同 embedding 维度的数据库放进来。
+   评测期间保持代码、模型、Key、数据路径和公网路由不变。
+
+9. 常见问题：
+   - Missing credential / Empty credential：补齐对应文件或环境变量。
+   - Python operation failed：检查 Python 版本、依赖安装和模型权限。
+     此通用报错刻意不输出提供商原文，以免带出私密信息。
+   - Add/Search 401：接口鉴权与官网 Memory System Key 不一致。
+   - Add 503：可能是提供商权限/余额/超时或并发繁忙；先降低并发检查。
+   - 本地健康正常，公网失败：检查隧道是否在线、目标端口是否正确。
+
+离线回归（可选，不调用真实模型）：
+   .\.venv\Scripts\python.exe run_offline_tests.py
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ops\test_portable_launcher.ps1 -PythonExe .\.venv\Scripts\python.exe
+不要直接运行旧 smoke_test.py 代替离线总入口。
+
+源码许可：MIT，见 LICENSE；复用与改动说明见 NOTICE.txt、SUBMISSION.txt。
+方法与提交说明见 README.md、SUBMISSION.txt；接口实现见 app.py。
+本交付不含任何凭证或评测数据。

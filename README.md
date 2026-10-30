@@ -1,5 +1,10 @@
 # MemoryShield+ — Textual candidate v3.16.0
 
+**Deploying on another Windows computer? Start with [DEPLOYMENT.txt](DEPLOYMENT.txt).**
+Use `ops/run-portable.ps1` for that installation: localhost port 18080,
+an independent `data/` database, private credentials and pinned Textual models.
+The historical deployment scripts below target the existing machines.
+
 **Candidate v3.16.0 is deployed at hlq-1; independent public health and invented
 Add/Search checks passed. No matching official Smoke or Full has been run.**
 The existing hlq5070 service remains v3.14.0. Its passed Smoke does not qualify this

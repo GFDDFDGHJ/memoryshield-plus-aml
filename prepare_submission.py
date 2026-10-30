@@ -7,7 +7,7 @@ from pathlib import Path
 import zipfile
 
 FILES = (
-    ".gitignore", "README.md", "LICENSE", "NOTICE.txt", "SUBMISSION.txt",
+    ".gitignore", "README.md", "LICENSE", "NOTICE.txt", "SUBMISSION.txt", "DEPLOYMENT.txt",
     "requirements.txt", "app.py", "config.py",
     "store.py", "add_memory.py", "add_index.py", "test_add_memory.py",
     "test_add_index.py", "test_gpt_add_integration.py", "run_offline_tests.py",
@@ -39,6 +39,7 @@ FILES = (
     "watcher.ps1", "run-watcher.cmd",
     "ops/watch-isolated-textual.ps1", "ops/configure-hlq1-ingress.ps1",
     "ops/test_hlq1_migration.ps1",
+    "ops/run-portable.ps1", "ops/test_portable_launcher.ps1",
     "prepare_submission.py",
 )
 ROOT = Path(__file__).resolve().parent

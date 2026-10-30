@@ -4,6 +4,7 @@
 *.pem
 
 # Runtime database
+data/
 aml_memory.db*
 aml_text_v4.db*
 *.db
