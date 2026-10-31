@@ -6,12 +6,15 @@ Run this script in its own process, as with the other offline store suites.
 from __future__ import annotations
 
 import builtins
+from contextlib import contextmanager
 import copy
 import gc
 import hashlib
+import importlib.util
 import io
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -163,6 +166,120 @@ class GptAddIntegrationTests(unittest.TestCase):
 
     def assert_empty(self):
         self.assertEqual(self.counts(), dict.fromkeys(self.counts(), 0))
+
+    @contextmanager
+    def real_extractor_store(self, handler):
+        """Actual configured MemoryStore/extractor; both provider transports fake."""
+        self.assertEqual(Path(self.config.db_path).parent, Path(self.directory.name))
+        with patch.object(store_module, "OpenAI", return_value=NoNetworkEmbeddingClient()):
+            candidate = store_module.MemoryStore()
+        calls = []
+        def create(**kwargs):
+            calls.append(kwargs)
+            return handler(kwargs)
+        candidate._add_extractor._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        candidate.embed = self.store.embed
+        try:
+            with patch.object(app_module, "store", candidate):
+                yield candidate, calls
+        finally:
+            candidate._pool.shutdown(wait=True)
+            candidate._client.close()
+
+    @staticmethod
+    def valid_response(selections):
+        return {"model": "gpt-4o-mini-2024-07-18", "choices": [{"finish_reason": "stop",
+                "message": {"content": json.dumps({"selections": selections}), "refusal": None}}],
+                "usage": {"prompt_tokens": 101, "completion_tokens": 29}}
+
+    def test_release_defaults_are_v317_new_db_and_raw_policy_without_secret_reads(self):
+        path = Path(__file__).with_name("config.py")
+        spec = importlib.util.spec_from_file_location("_offline_release_default_config", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        with patch.dict(os.environ, _ENV), patch("builtins.open", _without_secret_files):
+            for name in ("AML_VERSION", "AML_DB_PATH", "AML_ADD_SELECTION_FAILURE_POLICY"):
+                os.environ.pop(name, None)
+            spec.loader.exec_module(module)
+        defaults = module.CONFIG
+        self.assertEqual(defaults.version, "v3.17.0")
+        self.assertEqual(Path(defaults.db_path).name, "aml_text_gpt_v317.db")
+        self.assertEqual(defaults.add_selection_failure_policy, "raw_on_unmatched")
+        self.assertEqual((defaults.add_llm_model, defaults.add_llm_concurrency,
+                          defaults.add_llm_timeout, defaults.add_llm_total_timeout),
+                         ("gpt-4o-mini", 2, 60, 180))
+
+    def test_default_policy_keeps_exact_spans_all_raw_and_usage_then_replays_atomically(self):
+        self.assertEqual(self.config.add_selection_failure_policy, "raw_on_unmatched")
+        picks = [{"message_index":0,"segment_index":0,"quote":"valve is closed","kind":"fact"},
+                 {"message_index":0,"segment_index":0,"quote":"INVENTED_PRIVATE_GENERATED","kind":"fact"},
+                 {"message_index":99,"segment_index":999,"quote":"source-shaped reference","kind":"fact"}]
+        body = self.body()
+        body["messages"] = [{"role":"user","content":"The fictional valve is closed."},
+                            {"role":"assistant","content":"Keep this whole second original message too."}]
+        with self.real_extractor_store(lambda _:self.valid_response(picks)) as (memory, calls):
+            self.assertEqual(memory._add_extractor.selection_failure_policy, "raw_on_unmatched")
+            health = self.client.get("/health").json()
+            self.assertEqual(health["add_selection_failure_policy"], "raw_on_unmatched")
+            with self.assertLogs("add_memory", level="WARNING") as captured:
+                first = self.client.post("/add", json=body, headers=AUTH)
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()["written"], 2)
+            logged = "\n".join(captured.output)
+            self.assertIn("quotation_not_grounded count=1", logged)
+            self.assertIn("source_reference_invalid count=1", logged)
+            self.assertNotIn("INVENTED_PRIVATE_GENERATED", logged)
+            with memory._connect() as conn:
+                raw = conn.execute("SELECT role,content FROM items ORDER BY rid").fetchall()
+                kept = conn.execute("SELECT i.content,s.start_offset,s.end_offset FROM llm_memory_spans s JOIN items i ON i.rid=s.source_rid").fetchall()
+                usage = conn.execute("SELECT prompt_tokens,completion_tokens,call_count FROM add_llm_usage").fetchone()
+                receipt = conn.execute("SELECT written FROM add_requests").fetchone()
+            self.assertEqual([tuple(row) for row in raw], [(m["role"],m["content"]) for m in body["messages"]])
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0][0][kept[0][1]:kept[0][2]], "valve is closed")
+            self.assertEqual(tuple(usage), (101,29,1))
+            self.assertEqual(receipt[0], 2)
+            repeated = self.client.post("/add", json=body, headers=AUTH)
+            self.assertEqual(repeated.status_code, 200)
+            self.assertEqual(repeated.json(), first.json())
+            self.assertEqual((len(calls),len(self.embed_calls)), (1,1))
+
+    def test_default_policy_all_unverified_stores_raw_zero_spans_and_real_call_usage(self):
+        picks = [{"message_index":0,"segment_index":0,"quote":"INVENTED_NOT_IN_SOURCE","kind":"fact"},
+                 {"message_index":1,"segment_index":0,"quote":"unverified reference","kind":"event"}]
+        with self.real_extractor_store(lambda _:self.valid_response(picks)) as (memory, calls):
+            with self.assertLogs("add_memory", level="WARNING"):
+                result = self.client.post("/add", json=self.body(), headers=AUTH)
+            self.assertEqual(result.status_code, 200)
+            counts = self.counts()
+            self.assertEqual((counts["items"],counts["vec_items"],counts["llm_memory_spans"],
+                              counts["add_llm_usage"],counts["add_requests"]), (1,1,0,1,1))
+            with memory._connect() as conn:
+                self.assertEqual(conn.execute("SELECT content FROM items").fetchone()[0], self.messages()[0]["content"])
+            self.assertEqual(len(calls), 1)
+
+    def test_default_policy_provider_failure_remains_sanitized_503_and_no_partial_commit(self):
+        def fail(_):
+            raise RuntimeError("INVENTED_PRIVATE_PROVIDER_DETAIL")
+        with self.real_extractor_store(fail) as (memory, calls):
+            result = self.client.post("/add", json=self.body(), headers=AUTH)
+            self.assertEqual(result.status_code, 503)
+            self.assertEqual(result.json(), {"detail":{"reason":"add_memory_processing_failed"}})
+            self.assertEqual(result.headers["retry-after"], "5")
+            self.assertNotIn("INVENTED_PRIVATE_PROVIDER_DETAIL", result.text)
+            self.assert_empty()
+            self.assertEqual(len(calls), 1)
+            audit = Path(app_module.AUDIT_LOG).read_text(encoding="utf-8")
+            self.assertIn("provider_request_failed", audit)
+            self.assertNotIn("INVENTED_PRIVATE_PROVIDER_DETAIL", audit)
+
+    def test_health_reports_actual_validated_extractor_policy(self):
+        with self.real_extractor_store(lambda _:self.valid_response([])) as (memory, calls):
+            memory._add_extractor._selection_failure_policy = "strict"
+            result = self.client.get("/health")
+            self.assertEqual(result.json()["add_selection_failure_policy"], "strict")
+            self.assertEqual(len(calls), 0)
 
     def test_sixteen_concurrent_retries_make_one_model_call_and_one_embedding(self):
         self.embed_delay = self.extractor.delay = 0.025

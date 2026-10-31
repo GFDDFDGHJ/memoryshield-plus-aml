@@ -10,9 +10,10 @@ FILES = (
     ".gitignore", "README.md", "LICENSE", "NOTICE.txt", "SUBMISSION.txt", "DEPLOYMENT.txt",
     "requirements.txt", "app.py", "config.py",
     "store.py", "add_memory.py", "add_index.py", "test_add_memory.py",
-    "test_add_index.py", "test_gpt_add_integration.py", "run_offline_tests.py",
+    "test_add_index.py", "test_gpt_add_integration.py", "test_selection_resilience.py",
+    "test_add_failure_observability.py", "run_offline_tests.py",
     "probe_gpt_add.py", "facts.py", "governance.py", "smoke_test.py", "test_facts.py",
-    "test_store_regressions.py", "test_api_contract.py", "start.ps1",
+    "test_store_regressions.py", "test_api_contract.py",
     "test_fact_quality.py", "test_store_quality.py", "evaluate_quality.py",
     "test_context_facts.py", "test_prefix_retrieval.py", "evaluate_context_quality.py",
     "test_temporal_context.py", "test_scope_consistency.py", "evaluate_capabilities.py",
@@ -36,9 +37,6 @@ FILES = (
     "test_rule_execution_blocks.py", "test_state_qualification_scope.py",
     "evaluate_state_transitions.py", "evaluate_long_source_ranking.py",
     "evaluate_synthesis_progression.py", "evaluate_global_priority_controls.py",
-    "watcher.ps1", "run-watcher.cmd",
-    "ops/watch-isolated-textual.ps1", "ops/configure-hlq1-ingress.ps1",
-    "ops/test_hlq1_migration.ps1",
     "ops/run-portable.ps1", "ops/test_portable_launcher.ps1",
     "prepare_submission.py",
 )
@@ -48,9 +46,11 @@ ROOT = Path(__file__).resolve().parent
 def main():
     payloads = {name: (ROOT / name).read_bytes() for name in FILES}
     manifest = {
-        "version": "v3.16.0",
+        "version": "v3.17.0",
+        "status": "independent_candidate_not_deployed_or_approved_for_existing_full",
+        "selection_failure_policy": "raw_on_unmatched",
         "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
-        "base_commit": "d63976daff1f8533c883a9ef25e5861a0ba709e3",
+        "base_commit": "9f42b2af4d280b89440fa3cc6bb4ece2bd3de47e",
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in payloads.items()},
     }
     manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode()

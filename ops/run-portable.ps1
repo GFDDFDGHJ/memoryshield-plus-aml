@@ -49,13 +49,14 @@ function Set-PortableEnvironment([string]$Root, [int]$PortNumber, [string]$Addre
         AML_ADD_LLM_CONCURRENCY = '2'; AML_ADD_LLM_TIMEOUT = '60'
         AML_ADD_LLM_TOTAL_TIMEOUT = '180'; AML_ADD_LLM_CHUNK_CHARS = '12000'
         AML_ADD_LLM_MAX_OUTPUT_TOKENS = '2048'
+        AML_ADD_SELECTION_FAILURE_POLICY = 'raw_on_unmatched'
         AML_RERANK = 'true'; AML_RERANK_MODEL = 'qwen3-rerank'
         AML_RERANK_BASE_URL = 'https://dashscope.aliyuncs.com/api/v1'
         AML_RERANK_TIMEOUT = '6'; AML_GOVERNANCE = 'false'; AML_QUARANTINE = 'false'
         AML_EXTENDED_CONTEXT_CHARS = '160000'; AML_CONTEXT_CONTINUATION_CHARS = '128000'
         AML_RECENCY_WEIGHT = '0.10'; AML_CANDIDATE_POOL = '4000'
-        AML_VERSION = 'v3.16.0'; AML_HOST = $Address; AML_PORT = [string]$PortNumber
-        AML_DB_PATH = Join-Path $Root 'data\aml_text_gpt_v316.db'
+        AML_VERSION = 'v3.17.0'; AML_HOST = $Address; AML_PORT = [string]$PortNumber
+        AML_DB_PATH = Join-Path $Root 'data\aml_text_gpt_v317.db'
         PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1'
     }
     foreach ($entry in $settings.GetEnumerator()) {
@@ -86,8 +87,8 @@ from add_memory import AddMemoryExtractor
 from add_index import ensure_schema, store_extraction, rank_source_boosts
 assert sys.version_info >= (3, 10), 'Python 3.10 or newer is required'
 assert c.auth_token and c.embedding_api_key and c.add_llm_api_key
-assert c.version == 'v3.16.0' and c.host == sys.argv[2] and c.port == int(sys.argv[3])
-assert os.path.normcase(os.path.abspath(c.db_path)) == os.path.normcase(os.path.abspath(os.path.join(sys.argv[1], 'data', 'aml_text_gpt_v316.db')))
+assert c.version == 'v3.17.0' and c.host == sys.argv[2] and c.port == int(sys.argv[3])
+assert os.path.normcase(os.path.abspath(c.db_path)) == os.path.normcase(os.path.abspath(os.path.join(sys.argv[1], 'data', 'aml_text_gpt_v317.db')))
 assert c.add_llm_base_url == 'https://api.openai.com/v1' and c.add_llm_model == 'gpt-4o-mini'
 assert c.embedding_base_url == 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 assert c.embedding_model == 'text-embedding-v4' and c.embedding_mode == 'standard' and c.embedding_dim == 1024
@@ -99,14 +100,17 @@ assert c.rerank_base_url == 'https://dashscope.aliyuncs.com/api/v1' and c.rerank
 assert not c.governance_enabled and not c.quarantine_enabled
 assert c.extended_context_chars == 160000 and c.context_continuation_chars == 128000
 assert c.recency_weight == 0.10 and c.candidate_pool == 4000
-AddMemoryExtractor(c)
+assert c.add_selection_failure_policy == 'raw_on_unmatched'
+extractor = AddMemoryExtractor(c, selection_failure_policy=c.add_selection_failure_policy)
+assert extractor.selection_failure_policy == 'raw_on_unmatched'
 '@
 
 Push-Location -LiteralPath $projectRoot
 try {
     Invoke-PortablePython -Arguments @('-c', $preflight, $projectRoot, $BindAddress, [string]$Port) -Quiet
-    Write-Host ('Configuration ready: v3.16.0, ' + $BindAddress + ':' + $Port)
+    Write-Host ('Configuration ready: v3.17.0, ' + $BindAddress + ':' + $Port)
     Write-Host 'Models: gpt-4o-mini / text-embedding-v4 / qwen3-rerank'
+    Write-Host 'Selection policy: raw_on_unmatched'
     Write-Host ('Database: ' + $env:AML_DB_PATH)
     if ($CheckConfiguration) { return }
     if ($CheckModels) {

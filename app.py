@@ -59,6 +59,7 @@ _ADD_FAILURE_CODES = {
     "Add model returned an unknown source reference": "source_reference_invalid",
     "Add model returned invalid quotation or memory kind": "quotation_or_kind_invalid",
     "Add model quotation is not present in its source": "quotation_not_grounded",
+    "Add model returned no grounded memory selections": "all_selections_unmatched",
     "Add model returned invalid usage metadata": "usage_invalid",
     "Required Add model is busy": "model_busy",
     "Required Add model total deadline exceeded": "model_total_deadline",
@@ -209,8 +210,13 @@ class SearchRequest(BaseModel):
 @app.get("/health")
 def health() -> JSONResponse:
     configured = bool(CONFIG.add_llm_api_key)
+    policy = getattr(getattr(store, "_add_extractor", None), "selection_failure_policy",
+                     getattr(CONFIG, "add_selection_failure_policy", "strict"))
+    if policy not in ("strict", "raw_on_unmatched", "fail_if_all_unmatched"):
+        policy = "unknown"
     return JSONResponse({"status": "ok" if configured else "not-ready", "version": CONFIG.version,
             "observability_version": OBSERVABILITY_VERSION,
+            "add_selection_failure_policy": policy,
             "embedding_model": CONFIG.embedding_model,
             "add_model": CONFIG.add_llm_model,
             "add_model_required": True,

@@ -479,7 +479,8 @@ class MemoryStore:
             http_client=httpx.Client(follow_redirects=False),
         )
         self._add_extractor = (add_extractor if add_extractor is not None
-                               else AddMemoryExtractor(CONFIG))
+                               else AddMemoryExtractor(CONFIG, selection_failure_policy=getattr(
+                                   CONFIG, "add_selection_failure_policy", "strict")))
         # Fixed-size locks coalesce concurrent retries without retaining
         # arbitrary request IDs. SQLite receipts also guard cross-process writes.
         self._add_locks = [threading.Lock() for _ in range(128)]

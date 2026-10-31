@@ -62,10 +62,12 @@ class Config:
     add_llm_concurrency: int = int(os.environ.get("AML_ADD_LLM_CONCURRENCY", "2"))
     add_llm_chunk_chars: int = int(os.environ.get("AML_ADD_LLM_CHUNK_CHARS", "12000"))
     add_llm_max_output_tokens: int = int(os.environ.get("AML_ADD_LLM_MAX_OUTPUT_TOKENS", "2048"))
+    add_selection_failure_policy: str = os.environ.get(
+        "AML_ADD_SELECTION_FAILURE_POLICY", "raw_on_unmatched")
 
     # --- Storage ---
     db_path: str = os.environ.get(
-        "AML_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "aml_text_gpt_v316.db")
+        "AML_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "aml_text_gpt_v317.db")
     )
 
     # --- Retrieval ---
@@ -109,7 +111,7 @@ class Config:
     # --- Server ---
     host: str = os.environ.get("AML_HOST", "0.0.0.0")
     port: int = int(os.environ.get("AML_PORT", "8080"))
-    version: str = os.environ.get("AML_VERSION", "v3.16.0")
+    version: str = os.environ.get("AML_VERSION", "v3.17.0")
 
 
 CONFIG = Config()

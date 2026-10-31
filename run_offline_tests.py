@@ -16,14 +16,14 @@ def main() -> int:
     # The pre-GPT retrieval tests expect an in-process fake embedding backend.
     # Give them a fake Add extractor too. The new tests exercise the real
     # extractor implementation against explicit fake OpenAI responses instead.
+    modern = ["test_add_memory.py", "test_add_index.py", "test_gpt_add_integration.py",
+              "test_selection_resilience.py", "test_add_failure_observability.py"]
     legacy = ["smoke_test.py", "test_facts.py"] + sorted(
         path.name for path in ROOT.glob("test_*.py")
-        if path.name not in {"test_facts.py", "test_add_memory.py",
-                             "test_add_index.py", "test_gpt_add_integration.py"}
+        if path.name != "test_facts.py" and path.name not in modern
     )
-    modern = ["test_add_memory.py", "test_add_index.py", "test_gpt_add_integration.py"]
     results = []
-    with tempfile.TemporaryDirectory(prefix="aml-offline-v316-") as temp:
+    with tempfile.TemporaryDirectory(prefix="aml-offline-v317-") as temp:
         base = Path(temp)
         hooks = base / "offline_hooks"
         hooks.mkdir()
@@ -39,6 +39,8 @@ add_memory.AddMemoryExtractor = OfflineExtractor
             env = dict(os.environ, OPENAI_API_KEY="offline-never-dispatch",
                        EMBEDDING_API_KEY="offline-never-dispatch",
                        AML_AUTH_TOKEN="offline-contract-token",
+                       AML_VERSION="v3.17.0",
+                       AML_ADD_SELECTION_FAILURE_POLICY="raw_on_unmatched",
                        AML_DB_PATH=str(base / f"test-{index}.db"),
                        AML_GOVERNANCE="false", AML_QUARANTINE="false",
                        AML_RERANK="false", EMBEDDING_MODE="standard",
@@ -55,7 +57,7 @@ add_memory.AddMemoryExtractor = OfflineExtractor
             print(json.dumps({"script": script, "passed": row["passed"]}), flush=True)
             if not row["passed"]:
                 print((run.stdout + run.stderr)[-4000:], flush=True)
-    report = {"candidate_version": "v3.16.0", "offline_only": True,
+    report = {"candidate_version": "v3.17.0", "offline_only": True,
               "retrieval_regression_groups": len(legacy),
               "gpt_add_test_groups": len(modern),
               "all_passed": all(row["passed"] for row in results),

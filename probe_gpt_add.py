@@ -13,6 +13,31 @@ import tempfile
 import time
 
 
+def _runtime_metadata(configuration, store) -> dict:
+    policy = store._add_extractor.selection_failure_policy
+    return {
+        "candidate_version": configuration.version,
+        "selection_failure_policy": policy,
+        "configured_selection_failure_policy": configuration.add_selection_failure_policy,
+        "method_policy_ok": configuration.version == "v3.17.0"
+        and policy == configuration.add_selection_failure_policy == "raw_on_unmatched",
+    }
+
+
+def _selection_diagnostics(results) -> dict:
+    quotation_count = reference_count = 0
+    for result in results:
+        quotes = result.rejected_ungrounded_quotes
+        references = result.rejected_source_references
+        if any(type(value) is not int or value < 0 for value in (quotes, references)):
+            raise ValueError("Invalid selection diagnostic count")
+        quotation_count += quotes
+        reference_count += references
+    return {"rejected_ungrounded_quotes": quotation_count,
+            "rejected_source_references": reference_count,
+            "completed_extraction_count": len(results)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--allow-small-network-test", action="store_true")
@@ -24,21 +49,34 @@ def main() -> int:
         os.environ.get("EMBEDDING_API_KEY") or os.environ.get("DASHSCOPE_API_KEY")
     ):
         parser.error("Configure process OPENAI_API_KEY and a DashScope embedding key")
-    report = {"candidate_version": "v3.16.0", "invented_fixture_only": True,
+    report = {"invented_fixture_only": True,
               "production_db_used": False, "deployed_service_changed": False}
     with tempfile.TemporaryDirectory(prefix="aml-gpt-add-network-") as temp:
         os.environ.update(AML_DB_PATH=str(Path(temp) / "fixture.db"),
                           AML_GOVERNANCE="false", AML_RERANK="false",
-                          AML_VERSION="v3.16.0", EMBEDDING_MODE="standard")
+                          EMBEDDING_MODE="standard")
         from fastapi.testclient import TestClient
         import app
         app.AUDIT_LOG = str(Path(temp) / "audit.jsonl")
+        report.update(_runtime_metadata(app.CONFIG, app.store))
+        extraction_results = []
+        extract = app.store._add_extractor.extract
+        def observed_extract(messages):
+            result = extract(messages)
+            extraction_results.append(result)
+            return result
+        # Observe completed results in this disposable runtime; return each
+        # original result unchanged and never inspect or report source contents.
+        app.store._add_extractor.extract = observed_extract
         payload = {"request_id": "invented-gpt-one", "user_id": "invented-user-one",
                    "session_id": "invented-session", "messages": [
                        {"role": "user", "timestamp": 1793376000000,
                         "content": "Mira chose the cobalt ceramic sample for fictional project Aster. Review is on 17 November 2026."},
                        {"role": "assistant", "timestamp": 1793376001000,
-                        "content": "For project Aster, inspect the sample after cooling; if cracks appear, repeat the measurement before approval."}]}
+                        "content": "For project Aster, inspect the sample after cooling; if cracks appear, repeat the measurement before approval."},
+                       {"role": "user", "timestamp": 1793376002000,
+                        "content": "Mira\u00a0selected the cobalt ceramic sample for fictional project Aster."}]}
+        report["nbsp_fixture_included"] = True
         headers = {"Authorization": "Bearer " + app.CONFIG.auth_token} if app.CONFIG.auth_token else {}
         started = time.monotonic()
         try:
@@ -66,9 +104,14 @@ def main() -> int:
                         report["raw_message_count"] = conn.execute("SELECT count(*) FROM items").fetchone()[0]
                     report["estimated_gpt_usd_at_standard_rates"] = round(sum(
                         (row["prompt_tokens"] * .15 + row["completion_tokens"] * .60) / 1e6 for row in usage), 8)
+                    report["derived_selection_outcome"] = (
+                        "has_exact_spans" if report["selected_span_count"] else "no_selected_spans")
                     report["ok"] = all(report.get(k) for k in (
-                        "id_echo_ok", "replay_same_receipt", "search_ok", "isolation_ok")) and len(usage) == 1 and report["selected_span_count"] > 0
+                        "method_policy_ok", "id_echo_ok", "replay_same_receipt", "search_ok", "isolation_ok")) \
+                        and len(usage) == 1 and usage[0]["call_count"] >= 1 \
+                        and report["raw_message_count"] == len(payload["messages"])
         finally:
+            report.update(_selection_diagnostics(extraction_results))
             report["elapsed_seconds"] = round(time.monotonic() - started, 2)
             app.store._client.close()
             if app.store._add_extractor._client is not None:
