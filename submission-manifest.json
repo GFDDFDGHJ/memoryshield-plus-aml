@@ -1,16 +1,16 @@
 {
   "version": "v3.17.0",
-  "status": "independent_candidate_not_deployed_or_approved_for_existing_full",
+  "status": "deployed_original_url_official_evaluation_pending",
   "selection_failure_policy": "raw_on_unmatched",
   "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
   "base_commit": "9f42b2af4d280b89440fa3cc6bb4ece2bd3de47e",
   "files": {
     ".gitignore": "d1c3d65fbfee3de81b1eeb6d9673e7277e0df77beea22d53df1bb3d933731deb",
-    "README.md": "c7809ac654a4cc2e84871870fc478eb623bfc5754294d47e7c616a32f58067f1",
+    "README.md": "c2ac4c936bd3377e975a45ea090a3eef21719b3c02f2b61f17437b0c437461a4",
     "LICENSE": "5978e22231ed712444aa74bf9c8a505683813c3a9556896e46608f151d3dc81d",
     "NOTICE.txt": "4edb9fd3532ecc3cdb2cf2674884e56cc9c728e1dcd961ab64fc106b955387fb",
-    "SUBMISSION.txt": "db722abe5c3e3b558b1ec81addb9757fc1b0a3e76196b1bd81050d8c16ac30e7",
-    "DEPLOYMENT.txt": "ea63595c5131cb0526c6e0fb46467a4d8347c6528d4f5b3af62cc28d1dc8b7de",
+    "SUBMISSION.txt": "da84039eb1d75f3e764abf4d29b562fa78fe23894ac671d4e1f0bbcc821c7507",
+    "DEPLOYMENT.txt": "f5186331bacff053c013a74ddd6dd1859da390df7a149bb698bdb6bda7ce4443",
     "requirements.txt": "2a4f6b3916178d9223d2268046697764c2bf01ebc4594fbb2660693628b30ebd",
     "app.py": "f7bec30d4103bb14632c295d18ef60c37059c8990be2d0e6b3d1e96e66333976",
     "config.py": "91e1f4e86c5dfa4ac5a9f62fd77c4134725f7687d8ab3d0c5a25111bab7fec12",
@@ -85,6 +85,6 @@
     "evaluate_global_priority_controls.py": "a37b901eec3ee8a4cd5afd19cdb016e7fb69d8057c6cacf03d35d2095ff51377",
     "ops/run-portable.ps1": "2d88da92e927e174f385c7b46c6229741ff314ad7076aa3bf338140d38425670",
     "ops/test_portable_launcher.ps1": "376eb0718aa5b69dd8a9a26cb4a2bd6b95242c2758ba9f18ba9defaf9c9b5ed0",
-    "prepare_submission.py": "0c33fb9f5644e151a9e86ec20f5fc82d4cebbd1862e25fdd145955df0b0cab8c"
+    "prepare_submission.py": "57ae3499af98ce2b879ecb5e74e351b3b30b9adb1241dc697045637978825827"
   }
 }

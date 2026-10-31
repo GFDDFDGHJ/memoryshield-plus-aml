@@ -20,10 +20,11 @@ except ImportError:
     from admission import TextAddAdmission, AdmissionUnavailable, AdmissionDisconnected
 
 ROOT=Path(__file__).resolve().parent
-GATEWAY_VERSION='v1.1.2'
+GATEWAY_VERSION='v1.1.3'
 TEXTUAL_BACKENDS={
     'legacy_v3140':('http://127.0.0.1:8080','v3.14.0'),
     'gpt_v3160':('http://100.93.38.9:8380','v3.16.0'),
+    'gpt_v3170':('http://100.93.38.9:8480','v3.17.0'),
 }
 
 
@@ -198,6 +199,7 @@ def create_app(settings=None, *, transport=None, mode_controller=None, add_admis
         config=api.state.settings
         return {'status':'ok','system':'MemoryShield+ track gateway','version':GATEWAY_VERSION,
                 'textual_backend':config.textual_backend,'textual_version':config.selected_text_version,
+                'method_version':config.selected_text_version,
                 'active_memory_requests':api.state.active_memory_requests,**api.state.legacy_mode.status(),
                 **api.state.text_add_admission.status()}
 

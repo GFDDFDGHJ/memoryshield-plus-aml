@@ -17,7 +17,7 @@ except ImportError:
 
 def health(target='textual', **changes):
     result = {'status': 'ok', 'system': 'MemoryShield+ track gateway',
-              'version': 'v1.1.1', 'legacy_key_target': target,
+              'version': 'v1.1.3', 'legacy_key_target': target,
               'requested_legacy_key_target': target, 'legacy_config_valid': True,
               'legacy_active_requests': 0, 'active_memory_requests': 0,
               'legacy_switch_pending': False}

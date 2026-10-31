@@ -1,15 +1,19 @@
-# MemoryShield+ — Textual candidate v3.17.0
+# MemoryShield+ — Textual v3.17.0
 
-**Independent candidate: not deployed, not approved for the existing Full, and
-without an official Smoke or Full result.** The original bound URL continues to
-serve method v3.16.0, diagnostic patch v3.16.1 and gateway v1.1.2. This checkout
-and its source archive do not switch that deployment.
+**Deployed on the original URL; official evaluation pending.** On 2026-10-31 at
+14:26:46 China Standard Time (UTC+08:00), the original bound URL
+https://hlq5070.tail50f4d4.ts.net switched to method v3.17.0,
+`raw_on_unmatched`, gateway v1.1.3 and a separate database. The earlier v3.16.0
+backend and its database remain available. This version has not passed official
+Smoke or Full; no official task was resumed or created by the deployment, and
+compatibility with the earlier Full checkpoint remains unconfirmed.
 
 For independent local validation, follow [DEPLOYMENT.txt](DEPLOYMENT.txt) and use
 `ops/run-portable.ps1`: localhost port 18080, one worker, private credentials,
-and a new `data/aml_text_gpt_v317.db`. Historical machine-specific scripts and
-`ingress/` in Git describe previous deployments; they are excluded from this
-portable archive and are not v3.17.0 launch instructions.
+and a new `data/aml_text_gpt_v317.db`. The online deployment uses the separate
+host-specific `ops/watch-isolated-v317.ps1` in Git. That supervisor, `ingress/`
+and historical machine-specific launchers are excluded from the portable
+archive. Running the portable package does not switch or manage the online URL.
 
 ## Method change
 
@@ -62,6 +66,11 @@ Add/Search 200, rejected one ungrounded selection, retained two exact spans and
 all three original messages, and passed receipt replay and user isolation. Its
 database was temporary; no deployed service or official task was changed.
 
+After deployment, invented-data Add/Search, receipt replay and user isolation
+checks also passed on the original URL. Independent anonymous health checks
+from Singapore, China and the United States returned HTTP 200, valid TLS and
+v3.17.0. These observations do not replace official Smoke or Full.
+
 These checks do not certify full-suite runtime, budget or platform concurrency.
 A standalone backend can still return retryable 503 on overload. The existing
 original-host FIFO gateway is a separate deployment component and is not
@@ -72,7 +81,7 @@ version's evaluation arrangement and any reuse of earlier checkpoints.
 
 Repository: https://github.com/GFDDFDGHJ/memoryshield-plus-aml
 
-This candidate builds on `9f42b2af4d280b89440fa3cc6bb4ece2bd3de47e`.
+This version builds on `9f42b2af4d280b89440fa3cc6bb4ece2bd3de47e`.
 Underlying baselines and third-party attribution remain in NOTICE.txt,
 EVALUATION.md and LICENSE. The author approved MIT licensing; third-party code
 retains its own notices. Repair tests use invented data; official evaluation
@@ -80,5 +89,5 @@ source, questions and answers were not inspected for tuning.
 
 `prepare_submission.py` packages an explicit source allowlist. It excludes
 credentials, operational databases, logs, evaluation artifacts and historical
-machine-specific launchers. Publishing this candidate does not claim approval
+machine-specific launchers. Publishing this version does not claim approval
 or completion of a formal evaluation.

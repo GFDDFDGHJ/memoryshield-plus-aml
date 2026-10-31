@@ -11,7 +11,7 @@ FILES=('.gitignore','README.md','gateway.py','watcher.ps1','test_gateway.py','pr
 
 def main():
     payloads={name:(ROOT/name).read_bytes() for name in FILES}
-    manifest={'system':'MemoryShield+ track gateway','version':'v1.1.2',
+    manifest={'system':'MemoryShield+ track gateway','version':'v1.1.3',
               'repository':'https://github.com/GFDDFDGHJ/memoryshield-plus-aml',
               'files':{name:hashlib.sha256(value).hexdigest() for name,value in payloads.items()}}
     raw=(json.dumps(manifest,indent=2)+'\n').encode('utf-8')

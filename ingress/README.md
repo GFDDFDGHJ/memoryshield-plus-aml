@@ -1,6 +1,6 @@
 # Shared Textual / Coding transport
 
-Gateway **v1.1.2** exposes the same original URLs for both tracks:
+Gateway **v1.1.3** exposes the same original URLs for both tracks:
 
 - `https://hlq5070.tail50f4d4.ts.net/add`
 - `https://hlq5070.tail50f4d4.ts.net/search`
@@ -64,7 +64,7 @@ new local mode takes effect.
 ## Transport and health
 
 The request body and decoded backend response entity/status are relayed unchanged.
-Forwarding uses only the two named Textual destinations below and the fixed
+Forwarding uses only the three named Textual destinations below and the fixed
 Coding loopback target, no environment proxy, no redirects and
 bounded network timeouts. Content-Type and Retry-After are preserved; transport
 headers are rebuilt to avoid stale length/encoding metadata.
@@ -95,7 +95,7 @@ and credential, and the original Key's local Textual/Coding mode, are unchanged.
 
 Change this private file only after all evaluations have completed and active
 gateway requests have drained, then restart only the gateway. Verify
-`/__gateway_health` reports `version=v1.1.2`, `textual_backend=gpt_v3160` and
+`/__gateway_health` reports `version=v1.1.3`, `textual_backend=gpt_v3160` and
 `textual_version=v3.16.0`; verify `/health` and invented Add/Search end to end
 before starting an evaluation. These safe health fields expose no credentials.
 Editing the file does not change an already running process. To roll back,
@@ -154,3 +154,52 @@ have drained; queued requests are not durable across process restarts.
 Coding **v4.1.1** adds this original-Key compatibility adjustment. Its memory
 algorithms are unchanged from v4.1.0. Both directories are published at one
 fixed Git commit; separate source archives cover the backend and gateway.
+
+## Prepared v3.17.0 switch (not executed by this source candidate)
+
+Gateway v1.1.3 adds one fixed named mapping:
+
+| Local selector | Fixed Textual destination | Configured method version |
+| --- | --- | --- |
+| `legacy_v3140` | `http://127.0.0.1:8080` | `v3.14.0` |
+| `gpt_v3160` | `http://100.93.38.9:8380` | `v3.16.0` |
+| `gpt_v3170` | `http://100.93.38.9:8480` | `v3.17.0` |
+
+`/__gateway_health` retains `textual_version` and adds `method_version` as an
+explicit alias for the configured Textual method. It is a local configuration
+declaration, not a live probe or a claim about the current legacy Coding mode.
+Confirm the independent backend `/health` separately. Authentication, Coding
+isolation, FIFO two-active/64-waiting Add admission and all timeouts are unchanged.
+The watcher and local legacy-mode CLI are both pinned to gateway v1.1.3.
+
+Minimal cutover procedure for the operator, only after active requests and
+queue counters have drained and the evaluation is no longer writing:
+
+1. Verify the new independent backend at `100.93.38.9:8480` reports v3.17.0 and
+   `add_selection_failure_policy=raw_on_unmatched`; retain the existing original
+   Memory System Key. Do not copy or migrate the v3.16.0 evaluation database.
+   The v3.17.0 backend uses its own new `aml_text_gpt_v317.db`; changing this
+   gateway mapping does not migrate any data or platform checkpoint and does
+   not establish compatibility with a previous evaluation checkpoint.
+2. Back up the current gateway source, watcher, local CLI and private selector
+   together outside any public source archive. Stop only the gateway supervisor
+   and gateway, leaving both Textual backend processes/databases untouched.
+3. Install this gateway source and matching v1.1.3 watcher/CLI. Atomically replace
+   the private `textual_backend.json` with `{"textual_backend":"gpt_v3170"}`.
+   Keep the original `legacy_target.json` in Textual mode. Restart only the
+   gateway supervisor hidden. Funnel 443 remains pointed at loopback port 8282;
+   public URLs and credentials do not change.
+4. Verify internal health shows gateway v1.1.3, `gpt_v3170`, method v3.17.0 and
+   zero queue/active counters. Verify original public `/health` independently
+   shows the actual backend v3.17.0. Any synthetic Add/Search check must use its
+   own invented namespace. This procedure never starts or resumes a platform
+   evaluation; the participant controls that separately.
+
+Rollback while drained: keep gateway v1.1.3 and atomically restore selector
+`{"textual_backend":"gpt_v3160"}`, then restart only the gateway. Confirm
+method v3.16.0 and the old backend health. The v3.16.0 mapping is deliberately
+retained; no automatic fallback occurs on a v3.17.0 error. If restoring the
+older gateway binaries instead, restore their matching watcher and CLI as a set.
+
+The local staged selector is private runtime configuration and is not included
+by `prepare_submission.py`. This directory has made no production changes.

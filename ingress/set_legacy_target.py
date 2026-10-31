@@ -19,7 +19,7 @@ import httpx
 HEALTH_URL = 'http://127.0.0.1:8282/__gateway_health'
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / 'legacy_target.json'
 EXPECTED_SYSTEM = 'MemoryShield+ track gateway'
-EXPECTED_VERSION = 'v1.1.1'
+EXPECTED_VERSION = 'v1.1.3'
 _TARGETS = frozenset({'textual', 'coding'})
 
 

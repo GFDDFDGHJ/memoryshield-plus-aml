@@ -12,7 +12,7 @@ function Log([string]$message) { Add-Content -LiteralPath (Join-Path $dir 'servi
 function Healthy {
     try {
         $state = Invoke-RestMethod -Uri 'http://127.0.0.1:8282/__gateway_health' -TimeoutSec 4
-        return ($state.status -eq 'ok' -and $state.system -eq 'MemoryShield+ track gateway' -and $state.version -eq 'v1.1.2')
+        return ($state.status -eq 'ok' -and $state.system -eq 'MemoryShield+ track gateway' -and $state.version -eq 'v1.1.3')
     } catch { return $false }
 }
 function Gateway-Processes {

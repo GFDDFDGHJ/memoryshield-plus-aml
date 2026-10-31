@@ -29,7 +29,8 @@ class LocalSelectorTests(unittest.TestCase):
             path=Path(directory)/'selector.json'
             for name,url,version in (
                     ('legacy_v3140','http://127.0.0.1:8080','v3.14.0'),
-                    ('gpt_v3160','http://100.93.38.9:8380','v3.16.0')):
+                    ('gpt_v3160','http://100.93.38.9:8380','v3.16.0'),
+                    ('gpt_v3170','http://100.93.38.9:8480','v3.17.0')):
                 with self.subTest(name=name):
                     path.write_bytes(json.dumps({'textual_backend':name}).encode())
                     self.assertEqual(load_textual_backend(path),name)
@@ -166,9 +167,10 @@ class GatewaySelectorTests(unittest.TestCase):
         self.start()
         response=self.client.get('/__gateway_health')
         self.assertEqual(response.status_code,200)
-        self.assertEqual(response.json()['version'],'v1.1.2')
+        self.assertEqual(response.json()['version'],'v1.1.3')
         self.assertEqual(response.json()['textual_backend'],'gpt_v3160')
         self.assertEqual(response.json()['textual_version'],'v3.16.0')
+        self.assertEqual(response.json()['method_version'],'v3.16.0')
         self.assertEqual(response.json()['legacy_key_target'],'textual')
         self.assertEqual(self.calls,[])
         for value in (TEXT_KEY,CODE_KEY,'100.93.38.9'):
@@ -180,6 +182,49 @@ class GatewaySelectorTests(unittest.TestCase):
         response=self.send('/search')
         self.assertEqual(response.status_code,503)
         self.assertEqual([str(request.url) for request in self.calls],['http://100.93.38.9:8380/search'])
+        self.assertNotIn(TEXT_KEY,response.text)
+
+    def test_v317_routes_exact_bytes_to_only_8480_and_reports_configured_method(self):
+        self.start(selection='gpt_v3170')
+        body=b'  {invalid; "textual_backend":"gpt_v3160", "track":"coding"}\x00\r\n'
+        for path in ('/add','/search'):
+            response=self.send(path+'?textual_backend=gpt_v3160',body=body,
+                headers={'X-Textual-Backend':'gpt_v3160','X-Memory-Track':'coding'})
+            request=self.calls[-1]
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(str(request.url),'http://100.93.38.9:8480'+path)
+            self.assertEqual(request.content,body)
+            self.assertEqual(response.content,body)
+            self.assertEqual(request.headers['authorization'],'Bearer '+TEXT_KEY)
+        for headers in ({},{'Authorization':'Bearer '+TEXT_KEY}):
+            self.assertEqual(self.client.get('/health',headers=headers).status_code,200)
+            self.assertEqual(str(self.calls[-1].url),'http://100.93.38.9:8480/health')
+        before=len(self.calls)
+        self.assertEqual(self.send(key='invented-wrong').status_code,401)
+        self.assertEqual(len(self.calls),before)
+        health=self.client.get('/__gateway_health').json()
+        self.assertEqual(health['version'],'v1.1.3')
+        self.assertEqual(health['textual_backend'],'gpt_v3170')
+        self.assertEqual((health['textual_version'],health['method_version']),('v3.17.0','v3.17.0'))
+        self.assertEqual((health['text_add_active'],health['text_add_waiting'],health['active_memory_requests']),(0,0,0))
+        self.assertEqual(len(self.calls),before)
+
+    def test_v317_keeps_private_coding_destination_and_credentials(self):
+        self.start(selection='gpt_v3170')
+        for path in ('/add','/search'):
+            response=self.send(path,key=CODE_KEY)
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(str(self.calls[-1].url),'http://127.0.0.1:8181'+path)
+            self.assertEqual(self.calls[-1].headers['authorization'],'Bearer '+CODE_KEY)
+            self.assertEqual(response.headers['x-memory-track'],'coding')
+
+    def test_v317_unavailable_is_not_retried_on_v316_or_coding(self):
+        def fail(request):
+            raise httpx.ConnectError('invented unavailable '+TEXT_KEY,request=request)
+        self.start(selection='gpt_v3170',respond=fail)
+        response=self.send('/add')
+        self.assertEqual(response.status_code,503)
+        self.assertEqual([str(request.url) for request in self.calls],['http://100.93.38.9:8480/add'])
         self.assertNotIn(TEXT_KEY,response.text)
 
 

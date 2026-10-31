@@ -1,8 +1,10 @@
-MemoryShield+ 文本赛道独立候选 v3.17.0
+MemoryShield+ 文本赛道 v3.17.0
 
-状态：独立源码候选，未部署到官网绑定接口，未通过官方 Smoke 或 Full。
-原接口继续运行方法 v3.16.0、诊断 v3.16.1、入口 v1.1.2。
-新版本如何评测及原任务哪些检查点兼容，尚未获主办方确认。
+状态：已部署原官网绑定接口，官方评测待完成，未通过官方 Smoke 或 Full。
+2026-10-31 14:26:46 CST（UTC+08:00），原地址
+https://hlq5070.tail50f4d4.ts.net 已切为方法 v3.17.0、
+策略 raw_on_unmatched、入口 v1.1.3 和独立新库。旧 v3.16.0 后端及旧库
+完整保留。此次部署未续跑或新建官网任务；原 Full 检查点兼容性未获确认。
 仓库：https://github.com/GFDDFDGHJ/memoryshield-plus-aml
 基于提交：9f42b2af4d280b89440fa3cc6bb4ece2bd3de47e
 
@@ -25,7 +27,8 @@ standard / 1024 维，每批最多十条；可选 qwen3-rerank。Search 只返�
 
 启动：ops/run-portable.ps1，仅独立运行，默认 127.0.0.1:18080、单 worker，
 新 data/aml_text_gpt_v317.db。不自动修改原域名、Key、隧道、旧服务或
-正式数据库。若获准切换，原公共地址可以保持不变；当前并未执行切换。
+正式数据库。线上专用监督脚本为 Git 中的 ops/watch-isolated-v317.ps1，
+与便携入口分开，不随便携包自动执行。原地址的线上切换已另行完成。
 
 容量：GPT 最多两个并发 Add；单调用 60 秒、总预算 180 秒，繁忙时可能
 返回可重试 503。embedding 超时 45 秒且无 SDK 重试，SQLite 锁等待
@@ -35,6 +38,8 @@ standard / 1024 维，每批最多十条；可选 qwen3-rerank。Search 只返�
 验证：离线测试只用虚构数据/临时库；小额真实模型联调同样只用虚构
 输入，不占官网 Smoke，也不代替官方 Smoke。仅查看故障状态、固定
 错误码、计数和耗时，未读取官方原文、问题或答案用于调优。
+部署后原地址的虚构 Add/Search、重放和用户隔离均通过；新加坡、中国、
+美国的独立匿名 Health 检查返回 200、有效 TLS 和 v3.17.0。
 正式版本登记、Smoke 准入及原任务/新任务安排请主办方确认后执行。
 
 作者已确认有权 MIT 授权，见 LICENSE；第三方归属见 NOTICE.txt。

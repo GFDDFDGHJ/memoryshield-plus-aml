@@ -1,21 +1,21 @@
 {
   "system": "MemoryShield+ track gateway",
-  "version": "v1.1.2",
+  "version": "v1.1.3",
   "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
   "files": {
     ".gitignore": "499ceb455b3b5d23cd722d1f129f5c566870cf93bf4c53e96aa915b58f515400",
-    "README.md": "d247d360a3e6ab4f478efdd8f2bd1119fed0c3ced1dd53b506ca32ea66d25f85",
-    "gateway.py": "71f9219e2cd458054217ed34b29c322b43ad97ff5fe9c5662160bcbaa3e5cd06",
-    "watcher.ps1": "a77154027d77ce4d0b691b5c973a10f283749427e37b976ab724995576594ef0",
+    "README.md": "e990a65d3214c185ead0ed52fd5be8f4e6f1cb67dfc6b2c6df5c28fcabcab784",
+    "gateway.py": "2ad8760aa450232e2aa4e64b2639109513b90976250659b0474d80904cdc0915",
+    "watcher.ps1": "3aeb9a97df2f72655e6407d097f1cf6cf0feaee11a4ccb2d464371b3197a236f",
     "test_gateway.py": "f1b778a5664a22432b4411ec82760c05def08ea3e9229ce99f0b191143f3698f",
-    "prepare_submission.py": "07a20e710aa647f0326a647fb4d086c7fdcffa6da1b60ba32cb56a63b243c41d",
+    "prepare_submission.py": "46ab0df7dc9c48da06025c3d1e0b47374dc7a79b39e3fca6471b45bd906f0e2e",
     "legacy_mode.py": "94c76a6df89790aa17558bf01830d11991d4847790a6248bcec4a79a97dc7f5e",
     "test_legacy_mode.py": "bf9051bc957db0031cae8c895a4fa9a1d8a5d47e5ea319421ffa677c7623efcd",
-    "set_legacy_target.py": "e035dd3f9bab3c52e389c0046c9c514abe9b371f87e43dee8fe1531e279c9169",
-    "test_set_legacy_target.py": "29c7e0b1314f9cd55d4f00312a8db4f286ec870978a9a11f8a3dec14af9d1a65",
+    "set_legacy_target.py": "32b508bde31c30f58c8d3718c08c2adf500051dcc444bb216135b3b51f992ebf",
+    "test_set_legacy_target.py": "6ba68a85a7c275f95f951f77a22d1469dcdb3acbbf96486cffc6e6566ce8c8b1",
     "test_local_target.py": "88de8f004e5c0aee62a1e11005c728a4c4afdf9b8fc71c5234aff58183ef5a1a",
-    "test_selector.py": "0365e390a3380eafb99eab0379f97ecb4b64ce13e6a00cd2c71d0bd0cec427a2",
+    "test_selector.py": "172cb06eeca857e93382e1572a52c3e4c6a876736242500c73edd154bbc26380",
     "admission.py": "eac3a8b4707686a7140511656a8f720a56647cd41c267dc13c114e52ba41e303",
-    "test_admission.py": "091cca3cae579e9208bc4f2ce9e14a69a0114720063930840a5176fa5c46e1a0"
+    "test_admission.py": "9252ac36470fe5b6b2500b68b2ce0ec8adb1deb0ba0fa85f4c4d0cac892cbfe0"
   }
 }

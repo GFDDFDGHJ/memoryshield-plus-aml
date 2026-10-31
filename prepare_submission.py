@@ -47,7 +47,7 @@ def main():
     payloads = {name: (ROOT / name).read_bytes() for name in FILES}
     manifest = {
         "version": "v3.17.0",
-        "status": "independent_candidate_not_deployed_or_approved_for_existing_full",
+        "status": "deployed_original_url_official_evaluation_pending",
         "selection_failure_policy": "raw_on_unmatched",
         "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
         "base_commit": "9f42b2af4d280b89440fa3cc6bb4ece2bd3de47e",
