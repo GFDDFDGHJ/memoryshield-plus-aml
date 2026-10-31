@@ -14,11 +14,13 @@ import httpx
 
 try:
     from .legacy_mode import LegacyModeController, LegacyModeBusy, LegacyModeUnavailable
+    from .admission import TextAddAdmission, AdmissionUnavailable, AdmissionDisconnected
 except ImportError:
     from legacy_mode import LegacyModeController, LegacyModeBusy, LegacyModeUnavailable
+    from admission import TextAddAdmission, AdmissionUnavailable, AdmissionDisconnected
 
 ROOT=Path(__file__).resolve().parent
-GATEWAY_VERSION='v1.1.1'
+GATEWAY_VERSION='v1.1.2'
 TEXTUAL_BACKENDS={
     'legacy_v3140':('http://127.0.0.1:8080','v3.14.0'),
     'gpt_v3160':('http://100.93.38.9:8380','v3.16.0'),
@@ -95,7 +97,7 @@ def load_settings():
         textual_backend=load_textual_backend())
 
 
-def create_app(settings=None, *, transport=None, mode_controller=None):
+def create_app(settings=None, *, transport=None, mode_controller=None, add_admission=None):
     # Tests inject fake credentials; only a live app loads deployment secrets.
     configuration=settings
 
@@ -105,6 +107,7 @@ def create_app(settings=None, *, transport=None, mode_controller=None):
         reader=(lambda:configuration.legacy_key_target) if configuration is not None else load_legacy_target
         api.state.legacy_mode=mode_controller if mode_controller is not None else LegacyModeController(reader)
         api.state.active_memory_requests=0
+        api.state.text_add_admission=add_admission if add_admission is not None else TextAddAdmission()
         async with httpx.AsyncClient(transport=transport,trust_env=False,follow_redirects=False,
                 limits=httpx.Limits(max_connections=80,max_keepalive_connections=32),
                 timeout=httpx.Timeout(300,connect=3,write=60,pool=10)) as client:
@@ -159,8 +162,17 @@ def create_app(settings=None, *, transport=None, mode_controller=None):
                 if not public_health:api.state.active_memory_requests+=1
                 try:
                     options={'timeout':5} if public_health else {}
-                    response=await api.state.upstream.request(request.method,base+path,
-                        content=await request.body(),headers=headers,**options)
+                    # Drain the original body before checking for disconnects;
+                    # is_disconnected must never consume an unread body segment.
+                    body=await request.body()
+                    async def forward():
+                        return await api.state.upstream.request(request.method,base+path,
+                            content=body,headers=headers,**options)
+                    if track=='textual' and path=='/add' and not public_health:
+                        response=await api.state.text_add_admission.run(forward,
+                            disconnected=request.is_disconnected)
+                    else:
+                        response=await forward()
                     # Retain the decoded entity/status and rebuild transport headers.
                     outgoing={'X-Memory-Track':track}
                     for name in ('content-type','retry-after'):
@@ -172,6 +184,10 @@ def create_app(settings=None, *, transport=None, mode_controller=None):
             return JSONResponse({'detail':{'reason':'legacy_track_switch_pending'}},status_code=503,headers={'Retry-After':'1'})
         except LegacyModeUnavailable:
             return JSONResponse({'detail':{'reason':'legacy_track_configuration_unavailable'}},status_code=503)
+        except AdmissionUnavailable as error:
+            return JSONResponse({'detail':{'reason':str(error)}},status_code=503,headers={'Retry-After':'5'})
+        except AdmissionDisconnected:
+            return Response(status_code=499)
         except httpx.TimeoutException:
             return JSONResponse({'detail':{'reason':'memory_upstream_timeout'}},status_code=504)
         except httpx.HTTPError:
@@ -182,7 +198,8 @@ def create_app(settings=None, *, transport=None, mode_controller=None):
         config=api.state.settings
         return {'status':'ok','system':'MemoryShield+ track gateway','version':GATEWAY_VERSION,
                 'textual_backend':config.textual_backend,'textual_version':config.selected_text_version,
-                'active_memory_requests':api.state.active_memory_requests,**api.state.legacy_mode.status()}
+                'active_memory_requests':api.state.active_memory_requests,**api.state.legacy_mode.status(),
+                **api.state.text_add_admission.status()}
 
     @api.get('/health')
     async def health(request:Request):

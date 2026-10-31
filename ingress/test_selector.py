@@ -166,7 +166,7 @@ class GatewaySelectorTests(unittest.TestCase):
         self.start()
         response=self.client.get('/__gateway_health')
         self.assertEqual(response.status_code,200)
-        self.assertEqual(response.json()['version'],'v1.1.1')
+        self.assertEqual(response.json()['version'],'v1.1.2')
         self.assertEqual(response.json()['textual_backend'],'gpt_v3160')
         self.assertEqual(response.json()['textual_version'],'v3.16.0')
         self.assertEqual(response.json()['legacy_key_target'],'textual')

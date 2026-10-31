@@ -2,8 +2,9 @@ MemoryShield+ 文本候选版 v3.16.0
 
 状态：独立后端与 hlq-1 公网入口均已部署，公网模拟 Add/Search 验证通过。
 新加坡/中国/美国独立 Health 探针均 200，TLS 有效。
-本版本无官方 Smoke，未启动 Full；原 hlq5070 线上仍为 v3.14.0。
-旧 Smoke 不适用于本次改动。
+本版本无匹配的官方 Smoke；Full 已尝试但尚未成功完成，没有正式成绩。
+原 hlq5070 当前实际运行 v3.16.0，入口恢复补丁为独立版本 v1.1.2。
+历史 Smoke 成绩来自旧实现，不能宣称是 v3.16.0 的测试结果。
 仓库：https://github.com/GFDDFDGHJ/memoryshield-plus-aml
 基线提交：d63976daff1f8533c883a9ef25e5861a0ba709e3
 候选固定提交号见配套 release-reference.txt（发布后生成）。
@@ -17,11 +18,11 @@ Search 返回来源证据，不调用生成模型或生成最终答案。片段�
 Embedding：text-embedding-v4，standard，1024 维，每批最多十条。
 Reranker：可选 qwen3-rerank，有界调用，失败保留确定性排序回退。
 
-拟部署接口保持：
-Add：https://hlq-1.tail50f4d4.ts.net/add
-Search：https://hlq-1.tail50f4d4.ts.net/search
-Health：https://hlq-1.tail50f4d4.ts.net/health
-沿用原 Memory System Key，不公开密钥。新入口 hlq-1 Funnel 443 ->
+正式任务使用的原接口保持：
+Add：https://hlq5070.tail50f4d4.ts.net/add
+Search：https://hlq5070.tail50f4d4.ts.net/search
+Health：https://hlq5070.tail50f4d4.ts.net/health
+沿用原 Memory System Key，不公开密钥。另有备用入口 hlq-1 Funnel 443 ->
 该机 loopback 8380 -> WireGuard 尾网 -> 当前机 100.93.38.9:8380。
 ops/configure-hlq1-ingress.ps1 在 hlq-1 的管理员 PowerShell 中配置，
 默认拒绝覆盖冲突路由，先备份并支持 -Rollback；不读取 Key。
@@ -31,14 +32,22 @@ ops/configure-hlq1-ingress.ps1 在 hlq-1 的管理员 PowerShell 中配置，
 deployments/textual-v3.16.0，候选库 aml_text_gpt_v316.db、日志均独立。
 两台电脑均需联网且不休眠。新公网两个 A 记录均通过模拟 Add/Search、
 重放/冲突处理、鉴权、Top K、并行检索与用户隔离验证；不是官方 Smoke。
-原 hlq5070 443 -> 8282 -> 文本 8080，legacy_key_target=textual 不变。
+原 hlq5070 443 -> 8282 -> 文本 100.93.38.9:8380，legacy_key_target=textual。
+v1.1.2 入口只对已鉴权的文本 Add 有界 FIFO 排队：同时转发 2 个，最多
+64 个等待，等待不超过 600 秒；原后端 I/O 超时 300 秒。队满/排队超时
+明确返回 503，平台按规则重试；不自动重送、不提前返回成功、不改写请求。
+本次恢复保留 v3.16.0 后端源码、模型、数据库和用户/请求标识。Search、
+代码赛道和 Health 不进入写入队列。排队不保证解决提供商错误或完成 Full。
 代码赛道暂停、数据独立；旧文本数据不迁移、不改动。
 
-建议初始并发 Add=2 / Search=2、Top K=100；这不是 Full 容量认证。
+当前官方契约接受 Add 并发上限 16–64、Search 16–256、Top K 1–100。
+不得使用旧的 2/2 平台配置建议。入口内部 2 个转发槽不改变平台并发声明；
+排队减少过载，并不构成 Full 容量认证。当前未成功完成正式全量评测。
 GPT 并发 2，过载等待最多 1 秒后 503；模型操作超时 60 秒，整批提取
 截止 180 秒，调用前后校验。Embedding 超时 45 秒且无 SDK 重试；
-SQLite 锁等待 30 秒；原共享入口 I/O 超时 300 秒，新 Funnel 中转不经过
-该共享入口，整链超时范围尚未实测。网络操作超时不等于严格
+SQLite 锁等待 30 秒；共享入口 I/O 超时 300 秒，另加上述排队预算。
+备用 hlq-1 中转不经过此排队入口。整链超时范围尚未全量实测。
+网络操作超时不等于严格
 墙钟取消，大输入/限流/失败会影响实际用时和费用。成功提交用量表不是
 完整账单；失败调用也可能计费。Windows 隐藏启动刷新用户/系统 Key，
 重启后依赖用户登录。完整 Full 容量与总费用尚未端到端验证。
@@ -49,7 +58,7 @@ SQLite 锁等待 30 秒；原共享入口 I/O 超时 300 秒，新 Funnel 中转
 https://developers.openai.com/api/docs/models/gpt-4o-mini
 
 中文 Full 检查项明确 Add 需使用 gpt-4o-mini；旧 v3.14.0 的零 LLM 实现
-不满足该明确条件。v3.16.0 已接入实际处理，仍须同版本/赛道官方 Smoke。
+不满足该明确条件。v3.16.0 已接入实际处理，但不能宣称已通过官方 Smoke。
 公开规则每赛道本届最多 30 次，但未明确说明同系统多 Key 是否合并计数。
 用户另有已申请的 Key；以其实际版本/赛道资格为准，不宣称换地址/Key 会
 自动获准额外配额，也不继承旧 Smoke；规则范围有疑问需向主办方核对。
@@ -57,7 +66,8 @@ https://developers.openai.com/api/docs/models/gpt-4o-mini
 
 材料截止 2026-10-31 23:59（UTC+8）；评测停止 2026-11-04 23:59。
 Full 最多两次/Key/赛道，第二次在首次完成满 30 天后；失败优先原任务续跑。
-评测中冻结源码、模型和路由。联系人、邮箱、机构/独立开发者及实际主机
+本次 v1.1.2 属于入口过载故障恢复，不改变记忆方法或返回成功的语义；
+相关变更与实际参评版本需如实披露，由主办方审核。联系人、邮箱、机构/独立开发者及实际主机
 容量与可用时段由本人核对，不代填虚构信息。
 
 作者已确认有权 MIT 授权，见 LICENSE/NOTICE.txt；第三方沿用其许可。

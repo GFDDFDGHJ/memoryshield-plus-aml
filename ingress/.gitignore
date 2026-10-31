@@ -10,3 +10,4 @@ legacy_target.switch.lock
 textual_backend.json
 backend-deployment.json
 backend-switch-backups/
+capacity-recovery-backups/

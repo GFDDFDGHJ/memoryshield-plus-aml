@@ -1,6 +1,6 @@
 # Shared Textual / Coding transport
 
-Gateway **v1.1.1** exposes the same original URLs for both tracks:
+Gateway **v1.1.2** exposes the same original URLs for both tracks:
 
 - `https://hlq5070.tail50f4d4.ts.net/add`
 - `https://hlq5070.tail50f4d4.ts.net/search`
@@ -95,7 +95,7 @@ and credential, and the original Key's local Textual/Coding mode, are unchanged.
 
 Change this private file only after all evaluations have completed and active
 gateway requests have drained, then restart only the gateway. Verify
-`/__gateway_health` reports `version=v1.1.1`, `textual_backend=gpt_v3160` and
+`/__gateway_health` reports `version=v1.1.2`, `textual_backend=gpt_v3160` and
 `textual_version=v3.16.0`; verify `/health` and invented Add/Search end to end
 before starting an evaluation. These safe health fields expose no credentials.
 Editing the file does not change an already running process. To roll back,
@@ -114,6 +114,42 @@ Funnel 443 destination every 20 seconds, restoring 8282 after configuration
 drift or the legacy Textual supervisor's historical 8080 recovery fallback.
 Textual and Coding source, processes and memory databases remain independent.
 The gateway is their shared public transport dependency.
+
+## Textual Add admission
+
+After authentication and explicit track selection, only Textual `/add` requests
+enter a FIFO transport queue. At most two are forwarded at once, matching the
+unchanged v3.16.0 GPT extractor's concurrency limit. At most 64 requests wait;
+each can wait up to 600 seconds before receiving a sanitized 503 with
+`Retry-After: 5`. This reduces overload retries without increasing model
+concurrency or changing memory extraction, retrieval, credentials, routing or
+database contents. Search, Coding, health and authentication failures do not
+enter this queue. Queues and limits are local to the single gateway worker.
+
+Original body bytes and request IDs pass through unchanged. The gateway does
+not parse request contents, acknowledge before the backend commits, persist
+queued bodies, retry requests or coalesce duplicates. Existing backend receipts
+remain responsible for request-ID replay and conflict detection. Queue length
+is bounded by request count; admitted HTTP bodies still occupy memory.
+
+A disconnected queued client is removed before forwarding. Cancellation of an
+active gateway handler keeps its admission slot and legacy-mode lease until
+the outstanding upstream HTTP operation completes; the backend's synchronous
+model thread cannot be reliably cancelled by a client disconnect. Ordinary
+upstream exceptions release the slot. Existing HTTPX limits remain unchanged:
+connect 3 seconds, write 60 seconds, pool wait 10 seconds and read 300 seconds.
+The 300 seconds is an I/O timeout, not proof that backend model work has stopped.
+An upstream timeout can therefore still temporarily leave model work running;
+provider errors, store lock collisions and direct backend callers can also
+still cause 503. Admission is a capacity repair, not a throughput or completion
+guarantee. A queue wait of 600 seconds plus the normal buffered upstream HTTP
+exchange fits under the documented 1800-second evaluator I/O timeout.
+
+The safe operator health response adds `text_add_active`, `text_add_waiting`,
+`text_add_concurrency`, `text_add_max_waiting` and
+`text_add_wait_timeout_seconds`. Existing fields are preserved. Stop or restart
+the gateway only when the evaluation has stopped and all active/queued counts
+have drained; queued requests are not durable across process restarts.
 
 Coding **v4.1.1** adds this original-Key compatibility adjustment. Its memory
 algorithms are unchanged from v4.1.0. Both directories are published at one

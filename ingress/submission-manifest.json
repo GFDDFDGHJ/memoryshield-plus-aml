@@ -1,19 +1,21 @@
 {
   "system": "MemoryShield+ track gateway",
-  "version": "v1.1.1",
+  "version": "v1.1.2",
   "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
   "files": {
-    ".gitignore": "d32ee83032074f01412ccc2f0e102ed9f46ca0d12b3ceff8707b4a6dc407c3c2",
-    "README.md": "7b4c5c1d11262b564dc607b0f862933a26662f168d1da58ded7b7b9d86432045",
-    "gateway.py": "698f211bcb4287025d0f36505b0111aaf2e20a6a3dc4352e39c68ff63869b141",
-    "watcher.ps1": "bacf44811d2c4442b309235df2b6c2552901d38049a6b45a726fdbd31317b0ea",
+    ".gitignore": "499ceb455b3b5d23cd722d1f129f5c566870cf93bf4c53e96aa915b58f515400",
+    "README.md": "d247d360a3e6ab4f478efdd8f2bd1119fed0c3ced1dd53b506ca32ea66d25f85",
+    "gateway.py": "71f9219e2cd458054217ed34b29c322b43ad97ff5fe9c5662160bcbaa3e5cd06",
+    "watcher.ps1": "a77154027d77ce4d0b691b5c973a10f283749427e37b976ab724995576594ef0",
     "test_gateway.py": "f1b778a5664a22432b4411ec82760c05def08ea3e9229ce99f0b191143f3698f",
-    "prepare_submission.py": "1f03d7ec9e973945c7167f87ccfae2df4a7bbc08ab746519026d0932864c0daf",
+    "prepare_submission.py": "07a20e710aa647f0326a647fb4d086c7fdcffa6da1b60ba32cb56a63b243c41d",
     "legacy_mode.py": "94c76a6df89790aa17558bf01830d11991d4847790a6248bcec4a79a97dc7f5e",
     "test_legacy_mode.py": "bf9051bc957db0031cae8c895a4fa9a1d8a5d47e5ea319421ffa677c7623efcd",
     "set_legacy_target.py": "e035dd3f9bab3c52e389c0046c9c514abe9b371f87e43dee8fe1531e279c9169",
     "test_set_legacy_target.py": "29c7e0b1314f9cd55d4f00312a8db4f286ec870978a9a11f8a3dec14af9d1a65",
     "test_local_target.py": "88de8f004e5c0aee62a1e11005c728a4c4afdf9b8fc71c5234aff58183ef5a1a",
-    "test_selector.py": "06119754b0f8b94979bbe9a306c46d6e4fc5239980278dd69c31d1be455ef872"
+    "test_selector.py": "0365e390a3380eafb99eab0379f97ecb4b64ce13e6a00cd2c71d0bd0cec427a2",
+    "admission.py": "eac3a8b4707686a7140511656a8f720a56647cd41c267dc13c114e52ba41e303",
+    "test_admission.py": "091cca3cae579e9208bc4f2ce9e14a69a0114720063930840a5176fa5c46e1a0"
   }
 }

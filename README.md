@@ -7,10 +7,10 @@ The historical deployment scripts below target the existing machines.
 
 **Candidate v3.16.0 is deployed at the original hlq5070 URL and at hlq-1.
 Independent public health and invented Add/Search checks verify connectivity;
-no matching official Smoke or Full has been run.**
+no matching official Smoke or completed Full result is available.**
 The original v3.14.0 backend remains on local port 8080 for rollback, while
-gateway v1.1.1 routes the original public URL to the separate GPT backend.
-Its historical Smoke does not qualify this changed implementation.
+gateway v1.1.2 routes the original public URL to the separate GPT backend.
+Historical Smoke results describe the earlier implementation, not this GPT candidate.
 The Chinese Full checklist explicitly requires
 gpt-4o-mini during Add; the old LLM-free service does not meet that condition.
 
@@ -59,7 +59,7 @@ The website-bound endpoints and original Memory System Key remain unchanged:
 - https://hlq5070.tail50f4d4.ts.net/search
 - https://hlq5070.tail50f4d4.ts.net/health
 
-Gateway v1.1.1 on loopback 8282 uses the local startup-only selector
+Gateway v1.1.2 on loopback 8282 uses the local startup-only selector
 `{"textual_backend":"gpt_v3160"}` to reach the fixed GPT backend at
 100.93.38.9:8380. Only two named, fixed destinations are accepted; callers
 cannot select a version or URL. Invalid configuration prevents startup, and
@@ -69,6 +69,16 @@ storage isolated. The original Key is forwarded unchanged to the GPT backend.
 Gateway source, tests and rollback instructions are in `ingress/` in the
 fixed GitHub revision. The portable Textual ZIP does not need this existing
 machine's shared gateway; its launcher provides a standalone local service.
+
+The October 31 transport recovery adds a bounded FIFO for authenticated
+Textual Add requests: two active forwards, at most 64 waiting requests,
+and a 600-second admission deadline followed by the existing upstream I/O
+timeout. It preserves the original request bytes, IDs, credentials, backend,
+model calls and database. Search, Coding and health bypass this queue.
+Successful Add is still returned only after the backend commits. Full
+recovery reuses the existing task and compatible checkpoint; the gateway
+does not create, resume or cancel evaluations. This is a transport-capacity
+repair, not a new memory method or a completed Full capacity certification.
 
 The additional hlq-1 entry is a separate relay: hlq-1 Funnel 443 -> its loopback 8380
 portproxy -> WireGuard tailnet -> hlq5070 100.93.38.9:8380, bound only on the
@@ -102,7 +112,9 @@ ceilings of 16–256, and Top K of 1–100. The earlier 2/2 recommendation was
 incorrect for this range. Selecting 16/16 meets the minimum accepted ceilings;
 it is not evidence that this service can safely sustain a Full run. GPT admits
 two Add operations, waiting at most one second on overload, then returns
-retryable 503. Before Full, verify at least 16 independent new Adds, concurrent
+retryable 503. The original public gateway now queues Textual Adds before
+they reach that semaphore; direct access through the separate relay does not.
+Before Full, verify at least 16 independent new Adds, concurrent
 Search and long inputs with invented data. Existing duplicate-request tests
 and small public connectivity checks do not establish that capacity.
 Per-operation model timeout is 60 seconds; the extraction
