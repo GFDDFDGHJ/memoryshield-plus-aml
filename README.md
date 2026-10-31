@@ -14,6 +14,14 @@ Historical Smoke results describe the earlier implementation, not this GPT candi
 The Chinese Full checklist explicitly requires
 gpt-4o-mini during Add; the old LLM-free service does not meet that condition.
 
+The independent observability patch **v3.16.1** adds only fixed, allowlisted
+failure-category counters and audit events. The API/memory-method version
+remains v3.16.0; health exposes the diagnostic revision separately as
+`observability_version`. No source content, IDs, credentials or provider error
+bodies are included in the new failure events. The diagnostic patch preserves
+the original success and 503 responses, model selection, extraction rules,
+database and routing. It does not claim to repair the unresolved Full failure.
+
 ## Method
 
 Every new valid Add invokes official **gpt-4o-mini** for durable memory selection.

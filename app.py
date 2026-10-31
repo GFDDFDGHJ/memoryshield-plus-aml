@@ -13,9 +13,14 @@ import json
 import hmac
 import os
 import time
+import threading
+from collections import Counter
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+import httpx
+from openai import (APIConnectionError, APIStatusError, APITimeoutError,
+                    AuthenticationError, PermissionDeniedError, RateLimitError)
 from pydantic import BaseModel, Field, field_validator
 from typing import Any
 
@@ -24,8 +29,83 @@ from governance import maybe_govern_add
 from store import AddRequestConflict, MemoryStore
 from add_memory import AddMemoryError
 
+OBSERVABILITY_VERSION = "v3.16.1"
 app = FastAPI(title="MemoryShield+ AML Submission", version=CONFIG.version)
 store = MemoryStore()
+
+# Exact, local messages only. Never serialize exceptions, source data, or IDs.
+_ADD_FAILURE_CODES = {
+    "Add model must be gpt-4o-mini": "configuration_invalid",
+    "Add API endpoint must be the configured official endpoint": "configuration_invalid",
+    "Add chunk character limit is outside supported bounds": "configuration_invalid",
+    "Add output token limit is outside supported bounds": "configuration_invalid",
+    "Add model timeout is outside supported bounds": "configuration_invalid",
+    "Add model total timeout is outside supported bounds": "configuration_invalid",
+    "Add model concurrency must be one or two": "configuration_invalid",
+    "Required Add model credentials are not configured": "credentials_missing",
+    "Add extraction requires flat source text messages": "input_invalid",
+    "Add extraction requires a source message role": "input_invalid",
+    "Add extraction requires a list of source messages": "input_invalid",
+    "Add model response identified an unexpected model": "response_model_invalid",
+    "Add model returned an invalid choice count": "choice_count_invalid",
+    "Add model response did not finish completely": "finish_incomplete",
+    "Add model did not return memory selections": "memory_selections_missing",
+    "Add model returned no structured content": "structured_content_missing",
+    "Add model returned invalid structured content": "structured_content_invalid",
+    "Add model returned an invalid memory selection schema": "selection_schema_invalid",
+    "Add model returned too many memory selections": "selection_count_invalid",
+    "Add model returned an invalid memory selection": "selection_entry_invalid",
+    "Add model returned invalid source indexes": "source_indexes_invalid",
+    "Add model returned an unknown source reference": "source_reference_invalid",
+    "Add model returned invalid quotation or memory kind": "quotation_or_kind_invalid",
+    "Add model quotation is not present in its source": "quotation_not_grounded",
+    "Add model returned invalid usage metadata": "usage_invalid",
+    "Required Add model is busy": "model_busy",
+    "Required Add model total deadline exceeded": "model_total_deadline",
+    "Required Add model request failed": "provider_request_failed",
+    "Add model identity changed within one request": "response_model_changed",
+    "Add request is already processing": "request_inflight",
+}
+_ADD_FAILURE_COUNTS = Counter()
+_ADD_FAILURE_COUNTS_LOCK = threading.Lock()
+
+
+def _add_failure_code(error: AddMemoryError) -> str:
+    # Unknown or malformed messages always collapse to one fixed code.
+    arguments = error.args
+    if len(arguments) != 1 or type(arguments[0]) is not str:
+        return "add_unknown"
+    code = _ADD_FAILURE_CODES.get(arguments[0], "add_unknown")
+    if code != "provider_request_failed":
+        return code
+    # `raise ... from None` suppresses traceback display, but preserves the
+    # context object. Inspect its class only; never read provider bodies,
+    # messages, error codes, headers, URLs, or response/request attributes.
+    upstream = error.__context__
+    if isinstance(upstream, (APITimeoutError, httpx.TimeoutException)):
+        return "provider_timeout"
+    if isinstance(upstream, RateLimitError):
+        return "provider_rate_or_quota_limited"
+    if isinstance(upstream, AuthenticationError):
+        return "provider_auth_failed"
+    if isinstance(upstream, PermissionDeniedError):
+        return "provider_forbidden"
+    if isinstance(upstream, APIConnectionError):
+        return "provider_connection_failed"
+    if isinstance(upstream, APIStatusError):
+        return "provider_http_failed"
+    return code
+
+
+def _record_add_failure(error: AddMemoryError) -> None:
+    code = _add_failure_code(error)
+    with _ADD_FAILURE_COUNTS_LOCK:
+        _ADD_FAILURE_COUNTS[code] += 1
+        count = _ADD_FAILURE_COUNTS[code]
+    _audit({"ts": round(time.time(), 3), "path": "/add", "status": 503,
+            "event": "add_failure", "failure_code": code,
+            "failure_code_process_total": count,
+            "observability_version": OBSERVABILITY_VERSION})
 
 # ------------------------------------------------------------------ audit log
 # uvicorn's access log is truncated by every restart (the launcher redirects
@@ -130,6 +210,7 @@ class SearchRequest(BaseModel):
 def health() -> JSONResponse:
     configured = bool(CONFIG.add_llm_api_key)
     return JSONResponse({"status": "ok" if configured else "not-ready", "version": CONFIG.version,
+            "observability_version": OBSERVABILITY_VERSION,
             "embedding_model": CONFIG.embedding_model,
             "add_model": CONFIG.add_llm_model,
             "add_model_required": True,
@@ -155,7 +236,8 @@ def add(
                                request_id=body.request_id)
     except AddRequestConflict:
         raise HTTPException(status_code=409, detail={"reason": "request_id_conflict"})
-    except AddMemoryError:
+    except AddMemoryError as error:
+        _record_add_failure(error)
         # Upstream bodies can contain source material: expose only a stable code.
         raise HTTPException(status_code=503, detail={"reason": "add_memory_processing_failed"},
                             headers={"Retry-After": "5"}) from None
