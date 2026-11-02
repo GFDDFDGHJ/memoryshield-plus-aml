@@ -17,7 +17,8 @@ def main() -> int:
     # Give them a fake Add extractor too. The new tests exercise the real
     # extractor implementation against explicit fake OpenAI responses instead.
     modern = ["test_add_memory.py", "test_add_index.py", "test_gpt_add_integration.py",
-              "test_selection_resilience.py", "test_add_failure_observability.py"]
+              "test_selection_resilience.py", "test_add_failure_observability.py",
+              "test_finish_diagnostics.py"]
     legacy = ["smoke_test.py", "test_facts.py"] + sorted(
         path.name for path in ROOT.glob("test_*.py")
         if path.name != "test_facts.py" and path.name not in modern

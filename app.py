@@ -27,9 +27,9 @@ from typing import Any
 from config import CONFIG
 from governance import maybe_govern_add
 from store import AddRequestConflict, MemoryStore
-from add_memory import AddMemoryError
+from add_memory import AddMemoryError, safe_finish_diagnostics
 
-OBSERVABILITY_VERSION = "v3.16.1"
+OBSERVABILITY_VERSION = "v3.16.2"
 app = FastAPI(title="MemoryShield+ AML Submission", version=CONFIG.version)
 store = MemoryStore()
 
@@ -103,10 +103,17 @@ def _record_add_failure(error: AddMemoryError) -> None:
     with _ADD_FAILURE_COUNTS_LOCK:
         _ADD_FAILURE_COUNTS[code] += 1
         count = _ADD_FAILURE_COUNTS[code]
-    _audit({"ts": round(time.time(), 3), "path": "/add", "status": 503,
-            "event": "add_failure", "failure_code": code,
-            "failure_code_process_total": count,
-            "observability_version": OBSERVABILITY_VERSION})
+    record = {"ts": round(time.time(), 3), "path": "/add", "status": 503,
+              "event": "add_failure", "failure_code": code,
+              "failure_code_process_total": count,
+              "observability_version": OBSERVABILITY_VERSION}
+    if code == "finish_incomplete":
+        try:
+            metadata = error.finish_diagnostics
+        except Exception:
+            metadata = None
+        record.update(safe_finish_diagnostics(metadata))
+    _audit(record)
 
 # ------------------------------------------------------------------ audit log
 # uvicorn's access log is truncated by every restart (the launcher redirects

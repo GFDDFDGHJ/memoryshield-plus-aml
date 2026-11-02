@@ -11,7 +11,7 @@ FILES = (
     "requirements.txt", "app.py", "config.py",
     "store.py", "add_memory.py", "add_index.py", "test_add_memory.py",
     "test_add_index.py", "test_gpt_add_integration.py", "test_selection_resilience.py",
-    "test_add_failure_observability.py", "run_offline_tests.py",
+    "test_add_failure_observability.py", "test_finish_diagnostics.py", "run_offline_tests.py",
     "probe_gpt_add.py", "facts.py", "governance.py", "smoke_test.py", "test_facts.py",
     "test_store_regressions.py", "test_api_contract.py",
     "test_fact_quality.py", "test_store_quality.py", "evaluate_quality.py",

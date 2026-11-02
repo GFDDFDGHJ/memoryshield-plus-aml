@@ -119,8 +119,12 @@ class ObservabilityTests(unittest.TestCase):
                 self.assertEqual(response.headers["retry-after"], "5")
                 record = self.failure_records()[-1]
                 self.assertEqual(record["failure_code"], code)
-                self.assertEqual(set(record), {"ts", "path", "status", "event", "failure_code", "failure_code_process_total", "observability_version"})
-                self.assertEqual(record["observability_version"], "v3.16.1")
+                expected_fields = {"ts", "path", "status", "event", "failure_code", "failure_code_process_total", "observability_version"}
+                if code == "finish_incomplete":
+                    expected_fields.add("finish_reason")
+                    self.assertEqual(record["finish_reason"], "unknown")
+                self.assertEqual(set(record), expected_fields)
+                self.assertEqual(record["observability_version"], "v3.16.2")
                 encoded = json.dumps(record)
                 self.assertNotIn("invented-owner", encoded)
                 self.assertNotIn("invented-session", encoded)
@@ -205,7 +209,7 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["version"], configuration.version)
         self.assertEqual(candidate.app.version, configuration.version)
-        self.assertEqual(response.json()["observability_version"], "v3.16.1")
+        self.assertEqual(response.json()["observability_version"], "v3.16.2")
         self.assertEqual(response.json()["add_model"], "gpt-4o-mini")
         self.assertNotIn("add_failures", response.json())
         fake_open = mock_open()

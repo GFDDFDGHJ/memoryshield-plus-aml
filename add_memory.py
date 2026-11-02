@@ -18,6 +18,11 @@ from typing import Any
 class AddMemoryError(Exception):
     """A model request or its source-grounded response could not be validated."""
 
+    def __init__(self, *args, finish_diagnostics=None):
+        super().__init__(*args)
+        if finish_diagnostics is not None:
+            self.finish_diagnostics = safe_finish_diagnostics(finish_diagnostics)
+
 
 @dataclass(frozen=True)
 class MemorySpan:
@@ -87,6 +92,43 @@ def _field(obj: Any, name: str, default: Any = None) -> Any:
 
 def _integer(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+_FINISH_REASONS = frozenset({"length", "content_filter", "tool_calls", "function_call", "unknown"})
+_MAX_DIAGNOSTIC_TOKENS = 1_000_000
+
+
+def safe_finish_diagnostics(metadata: Any) -> dict:
+    """Only fixed reason enums and bounded, actual integer usage values.
+
+    This observational bound does not change response acceptance. In
+    particular, never stringify an unknown value or coerce a token count.
+    """
+    metadata = metadata if type(metadata) is dict else {}
+    reason = metadata.get("finish_reason")
+    safe = {"finish_reason": reason if type(reason) is str and reason in _FINISH_REASONS else "unknown"}
+    for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = metadata.get(name)
+        if type(value) is int and 0 <= value <= _MAX_DIAGNOSTIC_TOKENS:
+            safe[name] = value
+    return safe
+
+
+def _unfinished_response_diagnostics(response: Any, reason: Any) -> dict:
+    # Never inspect source quotations, choices' content/refusal text, IDs,
+    # headers, or provider exception strings. Diagnostic lookup failures must
+    # not replace the original AddMemoryError or change its message.
+    metadata = {"finish_reason": reason}
+    try:
+        usage = _field(response, "usage")
+    except Exception:
+        usage = None
+    for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        try:
+            metadata[name] = _field(usage, name)
+        except Exception:
+            pass
+    return safe_finish_diagnostics(metadata)
 
 
 def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -229,8 +271,10 @@ class AddMemoryExtractor:
             raise AddMemoryError("Add model returned an invalid choice count")
         choice = choices[0]
         message = _field(choice, "message")
-        if _field(choice, "finish_reason") != "stop":
-            raise AddMemoryError("Add model response did not finish completely")
+        finish_reason = _field(choice, "finish_reason")
+        if finish_reason != "stop":
+            raise AddMemoryError("Add model response did not finish completely",
+                                 finish_diagnostics=_unfinished_response_diagnostics(response, finish_reason))
         if message is None or _field(message, "refusal") or _field(message, "tool_calls"):
             raise AddMemoryError("Add model did not return memory selections")
         content = _field(message, "content")

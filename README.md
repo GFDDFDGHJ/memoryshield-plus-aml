@@ -52,6 +52,29 @@ Model concurrency remains two; per-call and total GPT budgets remain 60 and
 180 seconds. Committed receipts prevent repeat model calls. The new database
 does not migrate or reuse the existing official evaluation database.
 
+## Diagnostic-only update
+
+Method/API version remains **v3.17.0**; the separate observability version is
+**v3.16.2**. An incomplete GPT response now records only a fixed finish-reason
+category and bounded integer token usage when supplied. No source text,
+response content, business identifiers, headers or exception strings are added
+to these diagnostics. Incomplete responses still fail with the same error;
+this update does not fix them or change models, prompts, limits, retrieval or
+transaction behavior.
+
+The pre-diagnostic v3.17.0 source baseline is commit
+[`137f7610d29edb63ad68fb867821aae4eb7ecae3`](https://github.com/GFDDFDGHJ/memoryshield-plus-aml/tree/137f7610d29edb63ad68fb867821aae4eb7ecae3).
+This publication adds a diagnostic delta to that baseline. It does not claim
+that an already-started Full originally ran this newer diagnostic commit.
+
+Run the focused offline checks with
+`python -m unittest -v test_add_memory test_add_failure_observability test_finish_diagnostics`.
+The offline runner also treats the new diagnostic tests as modern tests,
+without replacing the real extractor with the legacy test hook. An optional
+old-source comparison runs only when `AML_FINISH_BASELINE_SOURCE` explicitly
+points to an independent file matching the pinned pre-diagnostic source SHA;
+otherwise that comparison is skipped. These tests make no provider requests.
+
 ## Validation and capacity
 
 `run_offline_tests.py` runs invented-data regression and integration checks.
