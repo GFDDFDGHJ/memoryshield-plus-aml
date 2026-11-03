@@ -225,6 +225,7 @@ def health() -> JSONResponse:
             "observability_version": OBSERVABILITY_VERSION,
             "add_selection_failure_policy": policy,
             "embedding_model": CONFIG.embedding_model,
+            "query_embedding_length_fallback": "utf8-chunks-byte-mean-v1",
             "add_model": CONFIG.add_llm_model,
             "add_model_required": True,
             "add_model_configured": bool(CONFIG.add_llm_api_key),

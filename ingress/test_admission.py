@@ -203,7 +203,7 @@ class AdmissionGatewayTests(unittest.TestCase):
                             release.set()
                         self.assertEqual(first.result(timeout=1).content, b' bytes \x00\r\n')
                     state = client.get('/__gateway_health').json()
-                    self.assertEqual(state['version'], 'v1.1.3')
+                    self.assertEqual(state['version'], 'v1.1.4')
                     self.assertEqual(state['textual_version'], 'v3.16.0')
                     self.assertEqual(state['text_add_active'], 0)
                     self.assertEqual(state['text_add_waiting'], 0)

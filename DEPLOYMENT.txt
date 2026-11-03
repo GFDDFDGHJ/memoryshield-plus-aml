@@ -1,4 +1,13 @@
-MemoryShield+ v3.17.0 独立本地验证说明
+MemoryShield+ v3.17.1 独立本地验证说明
+
+2026-11-03 检索长度兼容修复：只有原始 Search embedding 请求明确返回
+输入长度错误时，才按 UTF-8 安全边界分块编码并加权合并；正常成功路径
+保持原样。原查询全文仍用于其余检索步骤。不是原始整段向量的等价替代。
+模型、Add、数据库格式、原网址和鉴权不变。线上修复继续使用原 v317
+目录和原 aml_text_gpt_v317.db，不新建正式库。详见 README.md。
+原 Full 官网标签 v3.14.0，实际部署切换历史保留，不声明全程固定 Commit。
+
+以下历史记录描述 v3.17.0 首次部署：
 
 原官网绑定地址已于 2026-10-31 14:26:46 CST（UTC+08:00）切换为
 v3.17.0 / raw_on_unmatched，入口 v1.1.3，使用独立新库；旧 v3.16.0
@@ -29,7 +38,7 @@ ops/watch-isolated-v317.ps1，与便携入口不同且不包含于便携源码�
 
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ops\run-portable.ps1 -CheckConfiguration
 
-   预期 v3.17.0、策略 raw_on_unmatched、监听 127.0.0.1:18080。
+   预期 v3.17.1、策略 raw_on_unmatched、监听 127.0.0.1:18080。
 
 4. 如需独立本地运行：
 
@@ -40,7 +49,7 @@ ops/watch-isolated-v317.ps1，与便携入口不同且不包含于便携源码�
 
    Invoke-RestMethod http://127.0.0.1:18080/health
 
-   核对 version=v3.17.0、add_selection_failure_policy=raw_on_unmatched、
+   核对 version=v3.17.1、add_selection_failure_policy=raw_on_unmatched、
    add_model=gpt-4o-mini、embedding_model=text-embedding-v4。
    Health 说明配置就绪，不证明余额、实际模型调用或 Full 容量。
 

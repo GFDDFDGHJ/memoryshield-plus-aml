@@ -84,7 +84,7 @@ try {
     Assert-Equal $env:AML_CANDIDATE_POOL '4000' 'Stale candidate pool retained.'
     Assert-Equal $env:AML_HOST '::1' 'IPv6 binding failed.'
     Assert-Equal $env:AML_PORT '18123' 'Custom port failed.'
-    Assert-Equal $env:AML_VERSION 'v3.17.0' 'Method version not pinned.'
+    Assert-Equal $env:AML_VERSION 'v3.17.1' 'Method version not pinned.'
     Assert-Equal $env:AML_ADD_SELECTION_FAILURE_POLICY 'raw_on_unmatched' 'Selection policy not pinned.'
     Assert-Equal $env:AML_DB_PATH (Join-Path $fixtureRoot 'data\aml_text_gpt_v317.db') 'Database isolation failed.'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixtureRoot 'data'))) 'Environment setup created data.'
@@ -148,7 +148,7 @@ sqlite3.connect = blocked
         [IO.File]::WriteAllText((Join-Path $isolatedRoot 'sitecustomize.py'), $guard)
         $env:AML_PYTHON = (Resolve-Path -LiteralPath $PythonExe).ProviderPath
         $actualOutput = (& (Join-Path $isolatedRoot 'ops\run-portable.ps1') -Port 18125 -CheckConfiguration *>&1 | Out-String)
-        Assert-True ($actualOutput -match 'Configuration ready: v3.17.0, 127.0.0.1:18125') 'Actual Python preflight failed.'
+        Assert-True ($actualOutput -match 'Configuration ready: v3.17.1, 127.0.0.1:18125') 'Actual Python preflight failed.'
         Assert-True ($actualOutput -match 'Selection policy: raw_on_unmatched') 'Actual selection policy was not reported.'
         Assert-True ($actualOutput -notmatch 'invented-offline-only') 'Actual preflight leaked a credential.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $isolatedRoot 'data'))) 'Actual preflight created a database directory.'

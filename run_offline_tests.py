@@ -18,7 +18,7 @@ def main() -> int:
     # extractor implementation against explicit fake OpenAI responses instead.
     modern = ["test_add_memory.py", "test_add_index.py", "test_gpt_add_integration.py",
               "test_selection_resilience.py", "test_add_failure_observability.py",
-              "test_finish_diagnostics.py"]
+              "test_finish_diagnostics.py", "test_query_embedding_length.py"]
     legacy = ["smoke_test.py", "test_facts.py"] + sorted(
         path.name for path in ROOT.glob("test_*.py")
         if path.name != "test_facts.py" and path.name not in modern
@@ -40,7 +40,7 @@ add_memory.AddMemoryExtractor = OfflineExtractor
             env = dict(os.environ, OPENAI_API_KEY="offline-never-dispatch",
                        EMBEDDING_API_KEY="offline-never-dispatch",
                        AML_AUTH_TOKEN="offline-contract-token",
-                       AML_VERSION="v3.17.0",
+                       AML_VERSION="v3.17.1",
                        AML_ADD_SELECTION_FAILURE_POLICY="raw_on_unmatched",
                        AML_DB_PATH=str(base / f"test-{index}.db"),
                        AML_GOVERNANCE="false", AML_QUARANTINE="false",
@@ -58,7 +58,7 @@ add_memory.AddMemoryExtractor = OfflineExtractor
             print(json.dumps({"script": script, "passed": row["passed"]}), flush=True)
             if not row["passed"]:
                 print((run.stdout + run.stderr)[-4000:], flush=True)
-    report = {"candidate_version": "v3.17.0", "offline_only": True,
+    report = {"candidate_version": "v3.17.1", "offline_only": True,
               "retrieval_regression_groups": len(legacy),
               "gpt_add_test_groups": len(modern),
               "all_passed": all(row["passed"] for row in results),

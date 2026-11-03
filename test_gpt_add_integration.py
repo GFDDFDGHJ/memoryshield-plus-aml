@@ -203,7 +203,7 @@ class GptAddIntegrationTests(unittest.TestCase):
                 os.environ.pop(name, None)
             spec.loader.exec_module(module)
         defaults = module.CONFIG
-        self.assertEqual(defaults.version, "v3.17.0")
+        self.assertEqual(defaults.version, "v3.17.1")
         self.assertEqual(Path(defaults.db_path).name, "aml_text_gpt_v317.db")
         self.assertEqual(defaults.add_selection_failure_policy, "raw_on_unmatched")
         self.assertEqual((defaults.add_llm_model, defaults.add_llm_concurrency,

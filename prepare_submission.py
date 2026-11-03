@@ -11,7 +11,7 @@ FILES = (
     "requirements.txt", "app.py", "config.py",
     "store.py", "add_memory.py", "add_index.py", "test_add_memory.py",
     "test_add_index.py", "test_gpt_add_integration.py", "test_selection_resilience.py",
-    "test_add_failure_observability.py", "test_finish_diagnostics.py", "run_offline_tests.py",
+    "test_add_failure_observability.py", "test_finish_diagnostics.py", "test_query_embedding_length.py", "run_offline_tests.py",
     "probe_gpt_add.py", "facts.py", "governance.py", "smoke_test.py", "test_facts.py",
     "test_store_regressions.py", "test_api_contract.py",
     "test_fact_quality.py", "test_store_quality.py", "evaluate_quality.py",
@@ -46,18 +46,18 @@ ROOT = Path(__file__).resolve().parent
 def main():
     payloads = {name: (ROOT / name).read_bytes() for name in FILES}
     manifest = {
-        "version": "v3.17.0",
-        "status": "deployed_original_url_official_evaluation_pending",
+        "version": "v3.17.1",
+        "status": "search_length_repair_official_evaluation_pending",
         "selection_failure_policy": "raw_on_unmatched",
         "repository": "https://github.com/GFDDFDGHJ/memoryshield-plus-aml",
-        "base_commit": "9f42b2af4d280b89440fa3cc6bb4ece2bd3de47e",
+        "base_commit": "00b0d22cca1739d4a13867faa7254d68b233519e",
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in payloads.items()},
     }
     manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode()
     archive = ROOT / "submission-source.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for name, data in sorted({**payloads, "submission-manifest.json": manifest_bytes}.items()):
-            info = zipfile.ZipInfo(name, date_time=(2026, 10, 31, 0, 0, 0))
+            info = zipfile.ZipInfo(name, date_time=(2026, 11, 3, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             z.writestr(info, data)
     (ROOT / "submission-manifest.json").write_bytes(manifest_bytes)

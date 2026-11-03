@@ -55,7 +55,7 @@ function Set-PortableEnvironment([string]$Root, [int]$PortNumber, [string]$Addre
         AML_RERANK_TIMEOUT = '6'; AML_GOVERNANCE = 'false'; AML_QUARANTINE = 'false'
         AML_EXTENDED_CONTEXT_CHARS = '160000'; AML_CONTEXT_CONTINUATION_CHARS = '128000'
         AML_RECENCY_WEIGHT = '0.10'; AML_CANDIDATE_POOL = '4000'
-        AML_VERSION = 'v3.17.0'; AML_HOST = $Address; AML_PORT = [string]$PortNumber
+        AML_VERSION = 'v3.17.1'; AML_HOST = $Address; AML_PORT = [string]$PortNumber
         AML_DB_PATH = Join-Path $Root 'data\aml_text_gpt_v317.db'
         PYTHONUTF8 = '1'; PYTHONDONTWRITEBYTECODE = '1'
     }
@@ -87,7 +87,7 @@ from add_memory import AddMemoryExtractor
 from add_index import ensure_schema, store_extraction, rank_source_boosts
 assert sys.version_info >= (3, 10), 'Python 3.10 or newer is required'
 assert c.auth_token and c.embedding_api_key and c.add_llm_api_key
-assert c.version == 'v3.17.0' and c.host == sys.argv[2] and c.port == int(sys.argv[3])
+assert c.version == 'v3.17.1' and c.host == sys.argv[2] and c.port == int(sys.argv[3])
 assert os.path.normcase(os.path.abspath(c.db_path)) == os.path.normcase(os.path.abspath(os.path.join(sys.argv[1], 'data', 'aml_text_gpt_v317.db')))
 assert c.add_llm_base_url == 'https://api.openai.com/v1' and c.add_llm_model == 'gpt-4o-mini'
 assert c.embedding_base_url == 'https://dashscope.aliyuncs.com/compatible-mode/v1'
@@ -108,7 +108,7 @@ assert extractor.selection_failure_policy == 'raw_on_unmatched'
 Push-Location -LiteralPath $projectRoot
 try {
     Invoke-PortablePython -Arguments @('-c', $preflight, $projectRoot, $BindAddress, [string]$Port) -Quiet
-    Write-Host ('Configuration ready: v3.17.0, ' + $BindAddress + ':' + $Port)
+    Write-Host ('Configuration ready: v3.17.1, ' + $BindAddress + ':' + $Port)
     Write-Host 'Models: gpt-4o-mini / text-embedding-v4 / qwen3-rerank'
     Write-Host 'Selection policy: raw_on_unmatched'
     Write-Host ('Database: ' + $env:AML_DB_PATH)

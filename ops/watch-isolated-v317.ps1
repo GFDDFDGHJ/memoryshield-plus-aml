@@ -1,4 +1,4 @@
-# Dedicated v3.17.0 backend; the v3.16.0 listener and store remain independent.
+# Dedicated v3.17.1 backend; the v3.16.0 listener and store remain independent.
 # Bind only this computer's Tailscale IP. This script never changes Funnel,
 # firewall rules, proxies, the legacy service, or any other listener.
 [CmdletBinding()]
@@ -34,7 +34,7 @@ Set-Location -LiteralPath $runtimePath
 $bindAddress = '100.93.38.9'
 $portNumber = 8480
 $expectedDns = 'hlq5070.tail50f4d4.ts.net'
-$expectedVersion = 'v3.17.0'
+$expectedVersion = 'v3.17.1'
 $tailscalePath = 'C:\Program Files\Tailscale\tailscale.exe'
 $logPath = Join-Path $runtimePath 'isolated-textual-watcher.log'
 $lockPath = Join-Path $runtimePath 'isolated-textual-watcher.lock'
@@ -132,7 +132,7 @@ from config import CONFIG as c
 from add_memory import AddMemoryExtractor
 from add_index import ensure_schema, store_extraction, rank_source_boosts
 expected_db = os.path.normcase(os.path.abspath(os.path.join(sys.argv[1], 'aml_text_gpt_v317.db')))
-assert c.version == 'v3.17.0' and c.host == '100.93.38.9' and c.port == 8480
+assert c.version == 'v3.17.1' and c.host == '100.93.38.9' and c.port == 8480
 assert os.path.normcase(os.path.abspath(c.db_path)) == expected_db
 assert c.auth_token and c.embedding_api_key and c.add_llm_api_key
 assert c.add_llm_base_url == 'https://api.openai.com/v1' and c.add_llm_model == 'gpt-4o-mini'

@@ -30,7 +30,8 @@ class LocalSelectorTests(unittest.TestCase):
             for name,url,version in (
                     ('legacy_v3140','http://127.0.0.1:8080','v3.14.0'),
                     ('gpt_v3160','http://100.93.38.9:8380','v3.16.0'),
-                    ('gpt_v3170','http://100.93.38.9:8480','v3.17.0')):
+                    ('gpt_v3170','http://100.93.38.9:8480','v3.17.0'),
+                    ('gpt_v3171','http://100.93.38.9:8480','v3.17.1')):
                 with self.subTest(name=name):
                     path.write_bytes(json.dumps({'textual_backend':name}).encode())
                     self.assertEqual(load_textual_backend(path),name)
@@ -167,7 +168,7 @@ class GatewaySelectorTests(unittest.TestCase):
         self.start()
         response=self.client.get('/__gateway_health')
         self.assertEqual(response.status_code,200)
-        self.assertEqual(response.json()['version'],'v1.1.3')
+        self.assertEqual(response.json()['version'],'v1.1.4')
         self.assertEqual(response.json()['textual_backend'],'gpt_v3160')
         self.assertEqual(response.json()['textual_version'],'v3.16.0')
         self.assertEqual(response.json()['method_version'],'v3.16.0')
@@ -203,7 +204,7 @@ class GatewaySelectorTests(unittest.TestCase):
         self.assertEqual(self.send(key='invented-wrong').status_code,401)
         self.assertEqual(len(self.calls),before)
         health=self.client.get('/__gateway_health').json()
-        self.assertEqual(health['version'],'v1.1.3')
+        self.assertEqual(health['version'],'v1.1.4')
         self.assertEqual(health['textual_backend'],'gpt_v3170')
         self.assertEqual((health['textual_version'],health['method_version']),('v3.17.0','v3.17.0'))
         self.assertEqual((health['text_add_active'],health['text_add_waiting'],health['active_memory_requests']),(0,0,0))
@@ -226,6 +227,32 @@ class GatewaySelectorTests(unittest.TestCase):
         self.assertEqual(response.status_code,503)
         self.assertEqual([str(request.url) for request in self.calls],['http://100.93.38.9:8480/add'])
         self.assertNotIn(TEXT_KEY,response.text)
+
+    def test_v3171_preserves_addresses_track_isolation_and_reports_new_version(self):
+        self.start(selection='gpt_v3171')
+        body=b'{"query":"invented body"}\r\n'
+        for path in ('/add','/search'):
+            for key,url,track in ((TEXT_KEY,'http://100.93.38.9:8480','textual'),
+                                  (CODE_KEY,'http://127.0.0.1:8181','coding')):
+                response=self.send(path,key=key,body=body)
+                request=self.calls[-1]
+                self.assertEqual(response.status_code,200)
+                self.assertEqual(str(request.url),url+path)
+                self.assertEqual(request.headers['authorization'],'Bearer '+key)
+                self.assertEqual((request.content,response.content),(body,body))
+                self.assertEqual(response.headers['x-memory-track'],track)
+        before=len(self.calls)
+        health=self.client.get('/__gateway_health').json()
+        self.assertEqual((health['version'],health['textual_backend']),('v1.1.4','gpt_v3171'))
+        self.assertEqual((health['textual_version'],health['method_version']),('v3.17.1','v3.17.1'))
+        self.assertEqual(len(self.calls),before)
+
+    def test_v3171_unavailable_never_changes_track_or_model_backend(self):
+        def fail(request):
+            raise httpx.ConnectError('invented unavailable',request=request)
+        self.start(selection='gpt_v3171',respond=fail)
+        self.assertEqual(self.send('/search').status_code,503)
+        self.assertEqual([str(request.url) for request in self.calls],['http://100.93.38.9:8480/search'])
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

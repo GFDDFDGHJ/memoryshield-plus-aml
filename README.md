@@ -1,4 +1,55 @@
-# MemoryShield+ — Textual v3.17.0
+# MemoryShield+ — Textual v3.17.1
+
+## Search input-length repair (2026-11-03)
+
+This patch builds on commit
+[`00b0d22cca1739d4a13867faa7254d68b233519e`](https://github.com/GFDDFDGHJ/memoryshield-plus-aml/commit/00b0d22cca1739d4a13867faa7254d68b233519e).
+It is a retrieval input compatibility change, not a claim that an existing Full
+ran one fixed commit throughout. The platform's original task label is v3.14.0;
+the deployed source has changed during that task. No new evaluation is created
+by this patch, and its formal checkpoint eligibility is not certified here.
+
+Search first makes the same original text-embedding-v4 request. Only a structured
+HTTP 400 `InvalidParameter` identifying the input-length range enables fallback.
+All queries accepted by the original request retain that exact vector. Quota,
+authentication, network, rate-limit and other parameter errors do not trigger it.
+
+Rejected queries are split in order at Unicode code-point boundaries, at most
+4096 UTF-8 bytes per chunk and 128 chunks. Every character, including the tail,
+is retained. The same model and dimensions encode batches of at most ten. The
+UTF-8 byte-weighted mean is L2-normalized; the original query remains unchanged
+for lexical matching, query planning and reranking. This is an approximation:
+it does not recreate an unavailable whole-query embedding or guarantee scores.
+
+The [official API](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api)
+limits each v4 text to 8192 model tokens. A byte budget is conservative engineering,
+not an exact token count; the error's 33000 range is not treated as a token limit.
+A rejected chunk still fails, without recursive retry. Dispatch stops after a
+60-second fallback budget; each chunk request's transport timeout is bounded by
+the remaining budget (transport phase timeouts are not a hard wall-clock cap).
+Over-budget, invalid indices/dimensions, non-finite values and zero-direction
+vectors fail explicitly. There is no truncation, fabricated hit or success on
+provider failure. The rare fallback adds model calls for the chunks.
+
+Add extraction, source embeddings, prompts, database schema and stored data are
+unchanged. Models remain gpt-4o-mini / text-embedding-v4 / qwen3-rerank. Runtime
+version becomes v3.17.1; diagnostic version remains v3.16.2. On the original host,
+the runtime directory and `aml_text_gpt_v317.db` retain their historical names.
+The address and authentication are unchanged. The gateway's new named selector
+`gpt_v3171` uses the same backend port; the older selector remains for rollback.
+
+Run `python -m unittest -v test_query_embedding_length` for invented-data,
+network-blocked checks, or `python run_offline_tests.py` for regression groups.
+No official memory, query or answer was read to implement this repair. No paid
+probe is required or automatically dispatched.
+
+Offline validation for this repair passed 22 focused length-recovery tests,
+44 retrieval/Add test groups (after updating the release-version assertion),
+86 gateway tests and 43 portable-launcher checks. The optional old-source
+diagnostic comparison is skipped when its explicitly pinned file is absent.
+These checks use invented data and do not certify completion of the Full.
+
+## Historical v3.17.0 deployment and method disclosure
 
 **Deployed on the original URL; official evaluation pending.** On 2026-10-31 at
 14:26:46 China Standard Time (UTC+08:00), the original bound URL
@@ -54,7 +105,7 @@ does not migrate or reuse the existing official evaluation database.
 
 ## Diagnostic-only update
 
-Method/API version remains **v3.17.0**; the separate observability version is
+That diagnostic-only update kept method/API version **v3.17.0**; its observability version is
 **v3.16.2**. An incomplete GPT response now records only a fixed finish-reason
 category and bounded integer token usage when supplied. No source text,
 response content, business identifiers, headers or exception strings are added

@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 
 import httpx
 import sqlite_vec
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 import facts as fact_layer
 import evidence_links as link_layer
@@ -55,6 +55,69 @@ except Exception:  # noqa: BLE001
 
 def _pack(vec: list[float]) -> bytes:
     return array.array("f", vec).tobytes()
+
+
+# This is a conservative byte budget, not a claim about the provider's tokenizer.
+# Only an explicit length rejection of the original Search query enables it.
+QUERY_EMBED_CHUNK_BYTES = 4096
+QUERY_EMBED_MAX_CHUNKS = 128
+QUERY_EMBED_FALLBACK_SECONDS = 60.0
+
+
+def _embedding_input_length_error(error: BadRequestError) -> bool:
+    if error.status_code != 400 or not isinstance(error.body, dict):
+        return False
+    body = error.body
+    if isinstance(body.get("error"), dict):
+        body = body["error"]
+    if body.get("code") != "InvalidParameter":
+        return False
+    message = body.get("message")
+    return body.get("param") == "input_length" or (
+        isinstance(message, str) and re.search(
+            r"\brange of input length should be\s*\[\s*1\s*,\s*[0-9]+\s*\]", message, re.I
+        ) is not None
+    )
+
+
+def _query_embedding_chunks(query: str) -> list[str]:
+    """Keep every code point, including the tail; reject an excessive budget."""
+    chunks = []
+    start, size = 0, 0
+    for index, char in enumerate(query):
+        width = len(char.encode("utf-8"))
+        if size + width > QUERY_EMBED_CHUNK_BYTES:
+            chunks.append(query[start:index])
+            if len(chunks) >= QUERY_EMBED_MAX_CHUNKS:
+                raise ValueError("query embedding fallback exceeds its chunk budget")
+            start, size = index, 0
+        size += width
+    if size:
+        chunks.append(query[start:])
+    return chunks
+
+
+def _merge_query_embeddings(vectors: list[list[float]], weights: list[int], dim: int) -> list[float]:
+    """Byte-weighted mean and stable L2 normalization, for length fallback only."""
+    if not vectors or len(vectors) != len(weights) or any(weight <= 0 for weight in weights):
+        raise ValueError("invalid query embedding fallback response count or weights")
+    if any(len(vector) != dim for vector in vectors):
+        raise ValueError("invalid query embedding fallback dimensions")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+           for vector in vectors for value in vector):
+        raise ValueError("non-finite or non-numeric query embedding fallback vector")
+    total = sum(weights)
+    fractions = [weight / total for weight in weights]
+    merged = [math.fsum(vector[index] * fraction for vector, fraction in zip(vectors, fractions))
+              for index in range(dim)]
+    scale = max((abs(value) for value in merged), default=0.0)
+    if not math.isfinite(scale) or scale == 0:
+        raise ValueError("query embedding fallback has no finite nonzero direction")
+    scaled = [value / scale for value in merged]
+    norm = math.hypot(*scaled)
+    if not math.isfinite(norm) or norm == 0:
+        raise ValueError("query embedding fallback has no finite nonzero norm")
+    return [value / norm for value in scaled]
 
 
 def _structured_id(kind: str, user_id: str, content: str) -> str:
@@ -551,7 +614,7 @@ class MemoryStore:
             conn.commit()
 
     # ------------------------------------------------------------- embed
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str], *, timeout: float | None = None) -> list[list[float]]:
         if not texts:
             return []
         if CONFIG.embedding_mode == "multimodal":
@@ -564,6 +627,7 @@ class MemoryStore:
                 batch = texts[start:start + batch_size]
                 resp = self._client.embeddings.create(
                     model=CONFIG.embedding_model, input=batch, dimensions=self._dim,
+                    **({"timeout": timeout} if timeout is not None else {}),
                 )
                 ordered = sorted(resp.data, key=lambda d: d.index)
                 if [d.index for d in ordered] != list(range(len(batch))):
@@ -711,8 +775,34 @@ class MemoryStore:
         return len(messages)
 
     # ------------------------------------------------------------ search
+    def _embed_query(self, query: str) -> list[float]:
+        try:
+            # Preserve the exact old request and vector on every successful input,
+            # even when a long query is accepted by the provider.
+            return self.embed([query])[0]
+        except BadRequestError as error:
+            if (CONFIG.embedding_mode != "standard" or
+                    CONFIG.embedding_model != "text-embedding-v4" or
+                    not _embedding_input_length_error(error)):
+                raise
+            chunks = _query_embedding_chunks(query)
+            if len(chunks) <= 1:
+                raise
+            # No recursive retry: a rejected chunk, quota error, timeout, malformed
+            # response or exhausted budget remains a failure, never an empty hit.
+            deadline = time.monotonic() + QUERY_EMBED_FALLBACK_SECONDS
+            vectors = []
+            batch_size = max(1, min(CONFIG.embedding_batch_size, 10))
+            for start in range(0, len(chunks), batch_size):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("query embedding fallback dispatch budget exhausted")
+                vectors.extend(self.embed(chunks[start:start + batch_size], timeout=min(
+                    remaining, CONFIG.embedding_timeout)))
+            return _merge_query_embeddings(vectors, [len(chunk.encode("utf-8")) for chunk in chunks], self._dim)
+
     def search(self, user_id: str, query: str, top_k: int) -> list[dict]:
-        qvec = self.embed([query])[0]
+        qvec = self._embed_query(query)
         with self._connect() as conn:
             fact_layer.ensure_schema(conn)
             results = self._layered(conn, user_id, query, qvec, top_k)

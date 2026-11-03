@@ -20,11 +20,12 @@ except ImportError:
     from admission import TextAddAdmission, AdmissionUnavailable, AdmissionDisconnected
 
 ROOT=Path(__file__).resolve().parent
-GATEWAY_VERSION='v1.1.3'
+GATEWAY_VERSION='v1.1.4'
 TEXTUAL_BACKENDS={
     'legacy_v3140':('http://127.0.0.1:8080','v3.14.0'),
     'gpt_v3160':('http://100.93.38.9:8380','v3.16.0'),
     'gpt_v3170':('http://100.93.38.9:8480','v3.17.0'),
+    'gpt_v3171':('http://100.93.38.9:8480','v3.17.1'),
 }
 
 
